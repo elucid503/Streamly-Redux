@@ -1,0 +1,6 @@
+.env
+streamly
+streamly.exe
+
+web/node_modules/
+web/dist/
