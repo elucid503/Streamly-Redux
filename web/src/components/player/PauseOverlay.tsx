@@ -37,7 +37,10 @@ export function PauseOverlay({ item, onResume }: PauseOverlayProps) {
       <div className="pointer-events-none absolute inset-0 bg-gradient-to-t from-black/70 via-black/35 to-black/20" />
 
       <motion.div
-        className="pointer-events-none relative z-10 mx-auto flex w-full max-w-3xl flex-col items-center gap-5 text-center sm:flex-row sm:items-center sm:gap-6 sm:text-left"
+        className={cn(
+          "pointer-events-none relative z-10 mx-auto flex flex-col items-center gap-5 text-center sm:flex-row sm:items-center sm:gap-6 sm:text-left",
+          live ? "w-fit max-w-3xl" : "w-full max-w-3xl",
+        )}
         initial={{ opacity: 0, y: 10, scale: 0.98 }}
         animate={{ opacity: 1, y: 0, scale: 1 }}
         transition={softSpring}
@@ -65,7 +68,7 @@ export function PauseOverlay({ item, onResume }: PauseOverlayProps) {
 
         )}
 
-        <div className="min-w-0 flex-1 space-y-1.5">
+        <div className={cn("min-w-0 space-y-1.5", !live && "flex-1")}>
 
           <h2 className="text-xl font-semibold tracking-tight text-white sm:text-2xl">{item.title}</h2>
 
@@ -88,13 +91,7 @@ export function PauseOverlay({ item, onResume }: PauseOverlayProps) {
 
           {item.description && (
 
-            <p className="line-clamp-3 text-sm leading-relaxed text-white/55">{item.description}</p>
-
-          )}
-
-          {live && !item.description && (
-
-            <p className="text-sm text-white/50">Live TV · resume jumps to the live edge</p>
+            <p className="line-clamp-2 text-sm leading-relaxed text-white/55">{item.description}</p>
 
           )}
 

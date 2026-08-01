@@ -7,6 +7,7 @@ import { Button } from "@/components/ui/button";
 
 import { useRoom } from "@/hooks/useRoom";
 import { getTitle } from "@/lib/api";
+import { movieCaption } from "@/lib/titleMeta";
 import type { Episode, Item, Title, TitleDetail as Detail } from "@/lib/types";
 
 interface TitleDetailProps {
@@ -111,7 +112,13 @@ export function TitleDetail({ title, onBack, onPlay }: TitleDetailProps) {
     episodeTitle,
     description: description || detail?.description,
 
-    caption: episodeNumber ? `S${season} · E${episodeNumber}` : undefined,
+    caption: episodeNumber
+      ? `S${season} · E${episodeNumber}`
+      : movieCaption({
+          year: detail?.year ?? title.year,
+          rating: detail?.rating ?? title.rating,
+          genres: detail?.genres ?? title.genres,
+        }),
 
     imdbId: detail?.imdbId,
     tmdbId: detail?.tmdbId,

@@ -140,17 +140,19 @@ html[data-mini] {
 }
 
 /* Call attention to return-to-player when the room is already watching. */
-@keyframes watching-outline {
+@keyframes watching-border {
 
   0%, 100% {
 
-    outline-color: rgb(239 68 68 / 0.95);
+    border-color: rgb(239 68 68 / 1);
+    box-shadow: 0 0 0 1px rgb(239 68 68 / 0.55), 0 0 12px rgb(239 68 68 / 0.45);
 
   }
 
   50% {
 
-    outline-color: rgb(239 68 68 / 0.2);
+    border-color: rgb(239 68 68 / 0.25);
+    box-shadow: 0 0 0 1px rgb(239 68 68 / 0.1), 0 0 4px rgb(239 68 68 / 0.1);
 
   }
 
@@ -158,10 +160,7 @@ html[data-mini] {
 
 @utility watching-callout {
 
-  outline: 2px solid rgb(239 68 68 / 0.95);
-  outline-offset: 2px;
-  animation: watching-outline 1.5s ease-in-out infinite;
+  border: 2px solid rgb(239 68 68 / 1);
+  animation: watching-border 2s ease-in-out infinite;
 
 }
-
-

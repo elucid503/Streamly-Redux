@@ -37,6 +37,7 @@ type Entry struct {
 	Title string `json:"title" bson:"title"`
 	Poster string `json:"poster,omitempty" bson:"poster,omitempty"`
 	Caption string `json:"caption,omitempty" bson:"caption,omitempty"`
+	Description string `json:"description,omitempty" bson:"description,omitempty"`
 
 	BoxType int `json:"boxType,omitempty" bson:"boxType,omitempty"`
 
@@ -142,7 +143,6 @@ func (s *Store) Record(ctx context.Context, guildID string, item resolve.Item) e
 
 		"title": item.Title,
 		"caption": item.Caption,
-
 		"boxType": item.BoxType,
 
 		"season": item.Season,
@@ -157,6 +157,12 @@ func (s *Store) Record(ctx context.Context, guildID string, item resolve.Item) e
 	if item.Poster != "" {
 
 		set["poster"] = item.Poster
+
+	}
+
+	if item.Description != "" {
+
+		set["description"] = item.Description
 
 	}
 
@@ -219,7 +225,6 @@ func (s *Store) SaveProgress(ctx context.Context, guildID string, item resolve.I
 
 		"title": item.Title,
 		"caption": item.Caption,
-
 		"boxType": item.BoxType,
 
 		"season": item.Season,
@@ -236,6 +241,12 @@ func (s *Store) SaveProgress(ctx context.Context, guildID string, item resolve.I
 	if item.Poster != "" {
 
 		set["poster"] = item.Poster
+
+	}
+
+	if item.Description != "" {
+
+		set["description"] = item.Description
 
 	}
 

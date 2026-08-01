@@ -35,7 +35,7 @@ export function QualityMenu({ handle }: { handle: PlayerHandle }) {
         <DropdownMenuLabel className="px-2 py-1.5">
 
           <div className="text-sm font-medium text-foreground">Quality</div>
-          <div className="text-muted-foreground text-xs font-normal">Only visible for you</div>
+          <div className="text-muted-foreground text-xs font-normal">Changes only for you</div>
 
         </DropdownMenuLabel>
 

@@ -9,13 +9,13 @@ import { formatTime } from "@/lib/clock";
 
 interface HistoryRowProps {
 
+  title?: string;
   items: HistoryEntry[];
-
   onSelect: (entry: HistoryEntry) => void;
 
 }
 
-export function HistoryRow({ items, onSelect }: HistoryRowProps) {
+export function HistoryRow({ title = "Recently played", items, onSelect }: HistoryRowProps) {
 
   const scroller = useRef<HTMLDivElement | null>(null);
 
@@ -100,7 +100,7 @@ export function HistoryRow({ items, onSelect }: HistoryRowProps) {
 
         <div className="flex min-w-0 items-baseline gap-2">
 
-          <h2 className="text-sm font-semibold tracking-tight">Recently played</h2>
+          <h2 className="text-sm font-semibold tracking-tight">{title}</h2>
 
           <span className="text-muted-foreground text-xs">{items.length}</span>
 
@@ -113,7 +113,7 @@ export function HistoryRow({ items, onSelect }: HistoryRowProps) {
             variant="secondary"
             size="icon-sm"
             disabled={!canLeft}
-            aria-label="Scroll recently played left"
+            aria-label={`Scroll ${title.toLowerCase()} left`}
             onClick={() => scrollByPage(-1)}
           >
 
@@ -126,7 +126,7 @@ export function HistoryRow({ items, onSelect }: HistoryRowProps) {
             variant="secondary"
             size="icon-sm"
             disabled={!canRight}
-            aria-label="Scroll recently played right"
+            aria-label={`Scroll ${title.toLowerCase()} right`}
             onClick={() => scrollByPage(1)}
           >
 

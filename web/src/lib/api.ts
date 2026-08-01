@@ -165,6 +165,7 @@ export interface HistoryEntry {
   title: string;
   poster?: string;
   caption?: string;
+  description?: string;
 
   boxType?: number;
 

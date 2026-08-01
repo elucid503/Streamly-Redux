@@ -15,6 +15,7 @@ import { Button } from "@/components/ui/button";
 import { useMiniMode } from "@/hooks/useMiniMode";
 import { useRoom } from "@/hooks/useRoom";
 import { getHistory, getTrending, search, type HistoryEntry, type SearchResults, type TopPicks } from "@/lib/api";
+import { movieCaption } from "@/lib/titleMeta";
 import type { Title } from "@/lib/types";
 
 interface BrowseProps {
@@ -152,6 +153,16 @@ export function Browse({ onWatch }: BrowseProps) {
 
   }, [results, rating, genre]);
 
+  const recentVod = useMemo(
+    () => history.filter((entry) => entry.kind === "vod"),
+    [history],
+  );
+
+  const recentChannels = useMemo(
+    () => history.filter((entry) => entry.kind === "channel"),
+    [history],
+  );
+
   const openTitle = useCallback((title: Title) => {
 
     // Movies skip the detail page and go straight into the room player.
@@ -163,6 +174,7 @@ export function Browse({ onWatch }: BrowseProps) {
         title: title.title,
         poster: title.poster,
         boxType: 1,
+        caption: movieCaption(title),
         description: title.description,
         tmdbId: title.tmdbId,
       });
@@ -214,6 +226,7 @@ export function Browse({ onWatch }: BrowseProps) {
       poster: entry.poster,
       boxType: 1,
       caption: entry.caption,
+      description: entry.description,
     });
 
     onWatch();
@@ -323,7 +336,9 @@ export function Browse({ onWatch }: BrowseProps) {
 
         <>
 
-          <HistoryRow items={history} onSelect={openHistory} />
+          <HistoryRow title="Recently played" items={recentVod} onSelect={openHistory} />
+
+          <HistoryRow title="Recently streamed" items={recentChannels} onSelect={openHistory} />
 
           <TitleRow title="Trending movies" count={filteredMovies.length} titles={filteredMovies} onOpen={openTitle} />
 
