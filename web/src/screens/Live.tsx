@@ -1,13 +1,15 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
-import { Tv } from "lucide-react";
+import { Radio, Tv } from "lucide-react";
 
 import { ChannelFilter } from "@/components/browse/ChannelFilter";
 import { ChannelGrid } from "@/components/browse/ChannelGrid";
 import { QueueSheet } from "@/components/browse/QueueSheet";
 import { SearchBar } from "@/components/browse/SearchBar";
+import { MiniPlaceholder } from "@/components/layout/MiniPlaceholder";
 import { PageLoader } from "@/components/PageLoader";
 import { Button } from "@/components/ui/button";
 
+import { useMiniMode } from "@/hooks/useMiniMode";
 import { useRoom } from "@/hooks/useRoom";
 import { getChannels } from "@/lib/api";
 import type { Channel } from "@/lib/types";
@@ -20,6 +22,7 @@ interface LiveProps {
 
 export function Live({ onWatch }: LiveProps) {
 
+  const mini = useMiniMode();
   const { state, setItem } = useRoom();
 
   const [channels, setChannels] = useState<Channel[] | null>(null);
@@ -72,6 +75,12 @@ export function Live({ onWatch }: LiveProps) {
 
   }, [setItem, onWatch]);
 
+  if (mini) {
+
+    return <MiniPlaceholder icon={Radio} label="Browsing Live TV" />;
+
+  }
+
   return (
 
     <div className="relative flex min-h-full w-full flex-col gap-4 px-4 pt-4 pb-[var(--bottom-dock-clearance)] sm:px-6 sm:pt-6 lg:px-8 lg:pt-8">
@@ -82,7 +91,7 @@ export function Live({ onWatch }: LiveProps) {
 
         <div className="flex-1">
 
-          <SearchBar value={query} searching={false} onChange={setQuery} placeholder="Search live TV…" />
+          <SearchBar value={query} searching={false} onChange={setQuery} placeholder="Search live TV channels..." />
 
         </div>
 

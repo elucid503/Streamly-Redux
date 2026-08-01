@@ -1,5 +1,6 @@
-import { Badge } from "@/components/ui/badge";
 import { ChannelLogo } from "@/components/browse/ChannelLogo";
+import { PlayOverlay } from "@/components/browse/PlayOverlay";
+import { Badge } from "@/components/ui/badge";
 import { cn } from "@/lib/cn";
 import type { Channel } from "@/lib/types";
 
@@ -24,12 +25,18 @@ export function ChannelGrid({ channels, activeId, onTune }: ChannelGridProps) {
           key={channel.id}
           onClick={() => onTune(channel)}
           className={cn(
-            "group bg-card hover:border-primary/60 focus-visible:ring-ring/50 flex flex-col gap-2 rounded-lg border p-3 text-left transition-colors outline-none focus-visible:ring-[3px]",
+            "group bg-card focus-visible:ring-ring/50 flex flex-col gap-2 rounded-lg border p-3 text-left outline-none transition-[filter] hover:brightness-110 focus-visible:ring-[3px]",
             activeId === channel.id && "border-primary",
           )}
         >
 
-          <ChannelLogo logo={channel.logo} name={channel.name} />
+          <div className="relative overflow-hidden rounded-md">
+
+            <ChannelLogo logo={channel.logo} name={channel.name} />
+
+            <PlayOverlay size="sm" className="rounded-md" />
+
+          </div>
 
           <div className="min-w-0">
 

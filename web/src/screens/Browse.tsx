@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState } from "react";
-import { Tv } from "lucide-react";
+import { Clapperboard, Tv } from "lucide-react";
 
 import { DiscoveryFilter, filterTitles, type RatingFloor } from "@/components/browse/DiscoveryFilter";
 import { QueueSheet } from "@/components/browse/QueueSheet";
@@ -7,9 +7,11 @@ import { SearchBar } from "@/components/browse/SearchBar";
 import { TitleDetail } from "@/components/browse/TitleDetail";
 import { TitleGrid } from "@/components/browse/TitleGrid";
 import { TitleRow } from "@/components/browse/TitleRow";
+import { MiniPlaceholder } from "@/components/layout/MiniPlaceholder";
 import { PageLoader } from "@/components/PageLoader";
 import { Button } from "@/components/ui/button";
 
+import { useMiniMode } from "@/hooks/useMiniMode";
 import { useRoom } from "@/hooks/useRoom";
 import { getTrending, search, type SearchResults, type TopPicks } from "@/lib/api";
 import type { Title } from "@/lib/types";
@@ -23,6 +25,7 @@ interface BrowseProps {
 // Movies, series, and the queue share this tab; live channels live under Live TV.
 export function Browse({ onWatch }: BrowseProps) {
 
+  const mini = useMiniMode();
   const { state, session } = useRoom();
 
   const [picks, setPicks] = useState<TopPicks | null>(null);
@@ -119,6 +122,19 @@ export function Browse({ onWatch }: BrowseProps) {
 
   }, [results, rating, genre]);
 
+  if (mini) {
+
+    return (
+
+      <MiniPlaceholder
+        icon={Clapperboard}
+        label={selected ? `Viewing ${selected.title}` : "Browsing Movies & Shows"}
+      />
+
+    );
+
+  }
+
   if (selected) {
 
     return (
@@ -149,7 +165,7 @@ export function Browse({ onWatch }: BrowseProps) {
               value={query}
               searching={searching}
               onChange={setQuery}
-              placeholder="Search movies and series"
+              placeholder="Search movies and series..."
             />
 
           </div>

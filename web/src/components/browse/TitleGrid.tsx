@@ -1,5 +1,6 @@
 import { Clapperboard, Star } from "lucide-react";
 
+import { PlayOverlay } from "@/components/browse/PlayOverlay";
 import { Badge } from "@/components/ui/badge";
 import type { Title } from "@/lib/types";
 
@@ -22,7 +23,7 @@ export function TitleGrid({ titles, onOpen }: TitleGridProps) {
         <button
           key={`${title.boxType}-${title.id}`}
           onClick={() => onOpen(title)}
-          className="group focus-visible:ring-ring/50 flex flex-col gap-2 rounded-lg text-left outline-none focus-visible:ring-[3px]"
+          className="group focus-visible:ring-ring/50 flex flex-col gap-2 rounded-lg text-left outline-none transition-[filter] hover:brightness-110 focus-visible:ring-[3px]"
         >
 
           <div className="bg-card relative aspect-[2/3] overflow-hidden rounded-lg border">
@@ -33,7 +34,7 @@ export function TitleGrid({ titles, onOpen }: TitleGridProps) {
                 src={title.poster}
                 alt=""
                 loading="lazy"
-                className="size-full object-cover transition-transform duration-200 group-hover:scale-105"
+                className="size-full object-cover"
               />
 
             ) : (
@@ -46,9 +47,11 @@ export function TitleGrid({ titles, onOpen }: TitleGridProps) {
 
             )}
 
+            <PlayOverlay />
+
             {title.rating && (
 
-              <Badge variant="secondary" className="absolute top-1.5 right-1.5 gap-1 bg-black/70 text-[10px]">
+              <Badge variant="secondary" className="absolute top-1.5 right-1.5 z-20 gap-1 bg-black/70 text-[10px]">
 
                 <Star className="size-2.5 fill-current" />
                 {title.rating}

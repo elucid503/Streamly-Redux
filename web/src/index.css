@@ -40,6 +40,13 @@
 
 }
 
+/* Discord activity miniplayer: tighter dock (see useMiniMode). */
+html[data-mini] {
+
+  --bottom-dock-clearance: 3.25rem;
+
+}
+
 @theme inline {
 
   --font-sans: "Inter", ui-sans-serif, system-ui, sans-serif;

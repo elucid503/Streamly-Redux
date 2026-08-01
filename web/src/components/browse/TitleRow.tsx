@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { ChevronLeft, ChevronRight, Clapperboard, Star } from "lucide-react";
 
+import { PlayOverlay } from "@/components/browse/PlayOverlay";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { cn } from "@/lib/cn";
@@ -167,7 +168,7 @@ function TitleCard({ title, onOpen }: { title: Title; onOpen: (title: Title) => 
     <button
       type="button"
       onClick={() => onOpen(title)}
-      className="group focus-visible:ring-ring/50 flex w-[8.5rem] shrink-0 flex-col gap-2 rounded-lg text-left outline-none focus-visible:ring-[3px] sm:w-36"
+      className="group focus-visible:ring-ring/50 flex w-[8.5rem] shrink-0 flex-col gap-2 rounded-lg text-left outline-none transition-[filter] hover:brightness-110 focus-visible:ring-[3px] sm:w-36"
     >
 
       <div className="bg-card relative aspect-[2/3] overflow-hidden rounded-lg border">
@@ -178,7 +179,7 @@ function TitleCard({ title, onOpen }: { title: Title; onOpen: (title: Title) => 
             src={title.poster}
             alt=""
             loading="lazy"
-            className="size-full object-cover transition-transform duration-200 group-hover:scale-105"
+            className="size-full object-cover"
           />
 
         ) : (
@@ -191,9 +192,11 @@ function TitleCard({ title, onOpen }: { title: Title; onOpen: (title: Title) => 
 
         )}
 
+        <PlayOverlay />
+
         {title.rating && (
 
-          <Badge variant="secondary" className="absolute top-1.5 right-1.5 gap-1 bg-black/70 text-[10px]">
+          <Badge variant="secondary" className="absolute top-1.5 right-1.5 z-20 gap-1 bg-black/70 text-[10px]">
 
             <Star className="size-2.5 fill-current" />
             {title.rating}

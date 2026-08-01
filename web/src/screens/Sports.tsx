@@ -1,14 +1,16 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
-import { Tv } from "lucide-react";
+import { Trophy, Tv } from "lucide-react";
 
 import { QueueSheet } from "@/components/browse/QueueSheet";
 import { SearchBar } from "@/components/browse/SearchBar";
 import { MatchCard } from "@/components/sports/MatchCard";
 import { MatchRow } from "@/components/sports/MatchRow";
 import { bucketFor, prettyCategory } from "@/components/sports/matchUtils";
+import { MiniPlaceholder } from "@/components/layout/MiniPlaceholder";
 import { PageLoader } from "@/components/PageLoader";
 import { Button } from "@/components/ui/button";
 
+import { useMiniMode } from "@/hooks/useMiniMode";
 import { useRoom } from "@/hooks/useRoom";
 import { getSports } from "@/lib/api";
 import type { SportsMatch } from "@/lib/types";
@@ -25,6 +27,7 @@ interface SportsProps {
 
 export function Sports({ onWatch }: SportsProps) {
 
+  const mini = useMiniMode();
   const { state, setItem, enqueue } = useRoom();
 
   const [matches, setMatches] = useState<SportsMatch[] | null>(null);
@@ -191,6 +194,12 @@ export function Sports({ onWatch }: SportsProps) {
 
   }, [enqueue]);
 
+  if (mini) {
+
+    return <MiniPlaceholder icon={Trophy} label="Browsing Sports" />;
+
+  }
+
   return (
 
     <div className="relative flex min-h-full w-full flex-col gap-5 px-4 pt-4 pb-[var(--bottom-dock-clearance)] sm:px-6 sm:pt-6 lg:px-8 lg:pt-8">
@@ -203,7 +212,7 @@ export function Sports({ onWatch }: SportsProps) {
 
           <div className="flex-1">
 
-            <SearchBar value={query} searching={false} onChange={setQuery} placeholder="Search teams, leagues…" />
+            <SearchBar value={query} searching={false} onChange={setQuery} placeholder="Search teams or leagues..." />
 
           </div>
 

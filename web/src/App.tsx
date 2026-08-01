@@ -6,6 +6,7 @@ import { BottomNav, type HomeTab } from "@/components/layout/BottomNav";
 import { Notices } from "@/components/Notices";
 import { TooltipProvider } from "@/components/ui/tooltip";
 
+import { useMiniMode, useMiniModeAttribute } from "@/hooks/useMiniMode";
 import { RoomProvider, useRoom } from "@/hooks/useRoom";
 import { formatError } from "@/lib/errors";
 import { fadeTransition, pageFade } from "@/lib/motion";
@@ -89,6 +90,10 @@ function Shell() {
 
   const { joined, arrivedMidSession } = useRoom();
 
+  // Miniplayer / tiny iframe — data-mini + non-interactive browse stubs; player stays live.
+  useMiniModeAttribute();
+  const mini = useMiniMode();
+
   const [mode, setMode] = useState<"home" | "watch">("home");
   const [tab, setTab] = useState<HomeTab>("vod");
 
@@ -131,7 +136,7 @@ function Shell() {
 
           <motion.div
             key={tab}
-            className="min-h-full"
+            className="h-full min-h-full"
             variants={pageFade}
             initial="hidden"
             animate="visible"
@@ -159,7 +164,7 @@ function Shell() {
 
       </div>
 
-      <BottomNav tab={tab} onChange={setTab} />
+      {!mini && <BottomNav tab={tab} onChange={setTab} />}
 
     </div>
 
