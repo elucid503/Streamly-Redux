@@ -82,7 +82,7 @@ func (r *Room) join(conn *Conn) {
 
 	r.conns[conn] = true
 
-	state := r.state
+	state := cloneState(r.state)
 	participants := r.participantList()
 
 	r.mu.Unlock()
@@ -214,7 +214,7 @@ func (r *Room) apply(conn *Conn, frame ClientFrame) {
 		At:     now,
 	}
 
-	state := r.state
+	state := cloneState(r.state)
 
 	r.mu.Unlock()
 
@@ -306,8 +306,7 @@ func (r *Room) setItem(ctx context.Context, conn *Conn, item *resolve.Item, sour
 
 	}
 
-	state := r.state
-	state.Queue = append([]resolve.Item(nil), r.state.Queue...)
+	state := cloneState(r.state)
 
 	r.mu.Unlock()
 
@@ -375,7 +374,7 @@ func (r *Room) clear(conn *Conn) {
 
 	r.state.Subtitle = nil
 
-	state := r.state
+	state := cloneState(r.state)
 
 	r.mu.Unlock()
 
@@ -464,9 +463,7 @@ func (r *Room) snapshot() (State, []Participant) {
 
 	r.mu.Lock()
 
-	state := r.state
-	state.Queue = append([]resolve.Item(nil), r.state.Queue...)
-
+	state := cloneState(r.state)
 	participants := r.participantList()
 
 	r.mu.Unlock()
@@ -546,8 +543,7 @@ func (r *Room) queueOp(ctx context.Context, conn *Conn, frame ClientFrame) {
 
 	next := r.currentQueued()
 
-	state := r.state
-	state.Queue = append([]resolve.Item(nil), r.state.Queue...)
+	state := cloneState(r.state)
 
 	r.mu.Unlock()
 
@@ -663,13 +659,39 @@ func (r *Room) Failover(ctx context.Context) {
 	r.state.Playback = playback
 	r.state.AnchorAt = nowMs()
 
-	state := r.state
+	state := cloneState(r.state)
 
 	r.mu.Unlock()
 
 	r.broadcast(ServerFrame{Type: "room", State: &state})
 
 	r.notice(nil, NoticeFailover, "Switched to backup source")
+
+}
+
+// cloneState returns a broadcast-safe copy. Empty queues stay non-nil so JSON is [] not null
+// (the client reads queue.length without optional chaining).
+func cloneState(state State) State {
+
+	state.Queue = cloneQueue(state.Queue)
+
+	return state
+
+}
+
+func cloneQueue(queue []resolve.Item) []resolve.Item {
+
+	if len(queue) == 0 {
+
+		return []resolve.Item{}
+
+	}
+
+	out := make([]resolve.Item, len(queue))
+
+	copy(out, queue)
+
+	return out
 
 }
 

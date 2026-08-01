@@ -150,7 +150,7 @@ export async function getSubtitles(query: SubtitleQuery): Promise<SubtitleTrack[
 
   const result = await request<{ tracks: SubtitleTrack[] }>(`/api/subtitles?${params.toString()}`);
 
-  return result.tracks;
+  return result.tracks ?? [];
 
 }
 
@@ -310,6 +310,6 @@ export async function getIntro(query: SubtitleQuery & { durationMs?: number }): 
 
   const result = await request<{ intro: IntroRange[] }>(`/api/intro?${params.toString()}`);
 
-  return result.intro;
+  return result.intro ?? [];
 
 }

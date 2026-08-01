@@ -55,8 +55,8 @@ export function TitleDetail({ title, history = [], onBack, onPlay }: TitleDetail
 
         }
 
-        setDetail(loaded);
-        setSeason(loaded.seasons[0]?.season ?? 1);
+        setDetail({ ...loaded, seasons: loaded.seasons ?? [] });
+        setSeason(loaded.seasons?.[0]?.season ?? 1);
 
       })
       .catch(() => !cancelled && setFailed(true));
@@ -80,7 +80,7 @@ export function TitleDetail({ title, history = [], onBack, onPlay }: TitleDetail
 
     let cancelled = false;
 
-    const episodes = detail.seasons.find((entry) => entry.season === pendingSeason)?.episodes ?? [];
+    const episodes = detail.seasons?.find((entry) => entry.season === pendingSeason)?.episodes ?? [];
 
     void preloadEpisodeThumbnails(episodes).then(() => {
 
@@ -103,7 +103,7 @@ export function TitleDetail({ title, history = [], onBack, onPlay }: TitleDetail
 
   }, [pendingSeason, detail]);
 
-  const episodes = detail?.seasons.find((entry) => entry.season === season)?.episodes ?? [];
+  const episodes = detail?.seasons?.find((entry) => entry.season === season)?.episodes ?? [];
 
   // Guild history is episode-keyed — map this title's partial watches for the grid.
   const progressByEpisode = useMemo(() => {
@@ -306,7 +306,7 @@ export function TitleDetail({ title, history = [], onBack, onPlay }: TitleDetail
 
       </div>
 
-      {title.boxType === 2 && detail && detail.seasons.length > 0 && (
+      {title.boxType === 2 && detail && (detail.seasons?.length ?? 0) > 0 && (
 
         <div className="flex w-full min-w-0 flex-col gap-3">
 

@@ -173,7 +173,7 @@ export class Sync {
 
     this.clock.sample(startedAt, snapshot.serverTime, Date.now());
 
-    this.handlers.onState({ ...snapshot.state, queue: snapshot.state.queue ?? [] });
+    this.handlers.onState(normalizeState(snapshot.state));
     this.handlers.onParticipants(snapshot.participants ?? []);
     this.handlers.onStatus("open");
 
@@ -267,7 +267,7 @@ export class Sync {
 
         if (frame.state) {
 
-          this.handlers.onState(frame.state);
+          this.handlers.onState(normalizeState(frame.state));
 
         }
 
@@ -277,7 +277,7 @@ export class Sync {
 
         if (frame.state) {
 
-          this.handlers.onState(frame.state);
+          this.handlers.onState(normalizeState(frame.state));
 
         }
 
@@ -330,5 +330,17 @@ export class Sync {
     }
 
   }
+
+}
+
+// Go encodes a nil empty slice as JSON null; the player always expects queue to be an array.
+function normalizeState(state: RoomState): RoomState {
+
+  return {
+
+    ...state,
+    queue: state.queue ?? [],
+
+  };
 
 }
