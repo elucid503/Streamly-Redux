@@ -1,6 +1,6 @@
 import { DiscordSDK } from "@discord/embedded-app-sdk";
 
-import { exchangeToken, getConfig } from "@/lib/api";
+import { exchangeToken, getConfig, type AppConfig } from "@/lib/api";
 import { formatError } from "@/lib/errors";
 
 export interface AuthUser {
@@ -11,9 +11,21 @@ export interface AuthUser {
 
 }
 
+export interface Session {
+
+  user: AuthUser;
+
+  accessToken: string;
+  socketTicket: string;
+  instanceId: string;
+
+  config: AppConfig;
+
+}
+
 const stepTimeoutMs = 15000;
 
-let connection: Promise<AuthUser> | null = null;
+let connection: Promise<Session> | null = null;
 let instance: DiscordSDK | null = null;
 
 // Every step here can hang rather than reject, so each one is raced against a timeout to keep failures legible.
@@ -47,7 +59,7 @@ function withTimeout<T>(label: string, work: Promise<T>): Promise<T> {
 
 }
 
-export function connect(onStep: (step: string) => void): Promise<AuthUser> {
+export function connect(onStep: (step: string) => void): Promise<Session> {
 
   if (connection) {
 
@@ -67,7 +79,7 @@ export function connect(onStep: (step: string) => void): Promise<AuthUser> {
 
 }
 
-async function run(onStep: (step: string) => void): Promise<AuthUser> {
+async function run(onStep: (step: string) => void): Promise<Session> {
 
   const report = (step: string) => {
 
@@ -78,7 +90,9 @@ async function run(onStep: (step: string) => void): Promise<AuthUser> {
 
   report("Loading configuration");
 
-  const { clientId } = await withTimeout("Configuration request", getConfig());
+  const config = await withTimeout("Configuration request", getConfig());
+
+  const clientId = config.clientId;
 
   if (!clientId) {
 
@@ -136,7 +150,7 @@ async function run(onStep: (step: string) => void): Promise<AuthUser> {
 
   report("Exchanging token");
 
-  const accessToken = await withTimeout("Token exchange", exchangeToken(code));
+  const { accessToken, socketTicket } = await withTimeout("Token exchange", exchangeToken(code));
 
   report("Authenticating");
 
@@ -150,9 +164,19 @@ async function run(onStep: (step: string) => void): Promise<AuthUser> {
 
   return {
 
-    id: user.id,
-    username: user.username,
-    displayName: user.global_name ?? user.username,
+    user: {
+
+      id: user.id,
+      username: user.username,
+      displayName: user.global_name ?? user.username,
+
+    },
+
+    accessToken,
+    socketTicket,
+    instanceId: params.get("instance_id") ?? sdk.instanceId,
+
+    config,
 
   };
 

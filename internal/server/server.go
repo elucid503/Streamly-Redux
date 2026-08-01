@@ -1,20 +1,83 @@
 package server
 
 import (
+	"context"
 	"log/slog"
 	"net/http"
 	"path/filepath"
 	"strings"
 
 	"streamly/internal/auth"
+	"streamly/internal/catalog"
 	"streamly/internal/config"
 	"streamly/internal/proxy"
+	"streamly/internal/resolve"
+	"streamly/internal/room"
 	"streamly/internal/sources/daddylive"
+	"streamly/internal/sources/febbox"
+	"streamly/internal/sources/introdb"
+	"streamly/internal/sources/ntv"
+	"streamly/internal/sources/showbox"
+	"streamly/internal/sources/subdl"
+	"streamly/internal/sources/tmdb"
+	"streamly/internal/sources/tvmaze"
+	"streamly/internal/sports"
 
 	"github.com/gin-gonic/gin"
 )
 
 func Run(cfg *config.Config) error {
+
+	live := daddylive.New()
+
+	channels := catalog.New(live)
+
+	// An unreachable upstream must not stop the binary booting; the catalog simply starts empty and fills on the next pass.
+	if err := channels.Refresh(context.Background()); err != nil {
+
+		slog.Error("initial catalog build failed", "err", err)
+
+	}
+
+	go channels.Watch(context.Background())
+
+	authenticator := auth.New(cfg.DiscordClientID, cfg.DiscordClientSecret)
+
+	box := showbox.New()
+	files := febbox.New(cfg.FebboxUICookie)
+
+	resolver := resolve.New(channels, live, ntv.New(), box, files)
+
+	hub := room.NewHub(resolver, authenticator)
+
+	media := proxy.New(cfg.AllowAnyOrigin)
+
+	media.OnFailure(func(id string, _ string) {
+
+		hub.SourceFailed(id)
+
+	})
+
+	routes := &api{
+
+		cfg: cfg,
+
+		auth: authenticator,
+		hub:  hub,
+
+		catalog:  channels,
+		resolver: resolver,
+
+		showbox: box,
+		tmdb:    tmdb.New(cfg.TMDBAPIKey),
+		tvmaze:  tvmaze.New(),
+		sports:  sports.New(channels),
+
+		subdl:   subdl.New(cfg.SubdlAPIKey),
+		introdb: introdb.New(cfg.IntroDBToken),
+
+		tickets: map[string]socketTicket{},
+	}
 
 	gin.SetMode(gin.ReleaseMode)
 
@@ -22,35 +85,43 @@ func Run(cfg *config.Config) error {
 
 	engine.Use(gin.Recovery())
 
-	routes := &api{
-
-		cfg: cfg,
-
-		auth: auth.New(cfg.DiscordClientID, cfg.DiscordClientSecret),
-		live: daddylive.New(),
-
-	}
-
-	media := proxy.New(cfg.AllowAnyOrigin)
-
 	group := engine.Group("/api", logRequests())
 
 	group.GET("/config", routes.config)
 	group.POST("/token", routes.token)
-	group.GET("/stream/:id", routes.stream)
+
+	group.GET("/channels", routes.channels)
+	group.GET("/channels/:id/stream", routes.channelStream)
+	group.GET("/sports", routes.sportsMatches)
+
+	group.GET("/search", routes.search)
+	group.GET("/trending", routes.trending)
+	group.GET("/title/:boxType/:id", routes.title)
+
+	group.GET("/subtitles", routes.subtitles)
+	group.GET("/subtitle", routes.subtitle)
+	group.GET("/intro", routes.intro)
+	group.GET("/room", routes.roomState)
+	group.POST("/room", routes.roomAction)
+	group.POST("/client-error", routes.clientError)
+
+	engine.GET("/ws", routes.socket)
 
 	engine.GET("/proxy/media", media.OriginCheck(), media.Media)
+	engine.GET("/proxy/image", media.OriginCheck(), media.Image)
+	// Google Fonts CSS + gstatic files — blocked by the activity CSP at their origin (§2.1).
+	engine.GET("/proxy/fonts/css", media.OriginCheck(), media.FontCSS)
+	engine.GET("/proxy/fonts/file", media.OriginCheck(), media.FontFile)
 
 	serveSPA(engine, cfg.StaticDir)
 
 	server := &http.Server{
 
-		Addr: cfg.ListenAddr,
+		Addr:    cfg.ListenAddr,
 		Handler: stripProxyPrefix(engine),
-
 	}
 
-	slog.Info("listening", "addr", cfg.ListenAddr, "static", cfg.StaticDir, "allowAnyOrigin", cfg.AllowAnyOrigin)
+	slog.Info("listening", "addr", cfg.ListenAddr, "static", cfg.StaticDir, "channels", len(channels.Channels()), "vod", cfg.FebboxUICookie != "", "curation", cfg.TMDBAPIKey != "", "subtitles", cfg.SubdlAPIKey != "")
 
 	return server.ListenAndServe()
 
@@ -63,7 +134,11 @@ func logRequests() gin.HandlerFunc {
 
 		c.Next()
 
-		slog.Info("api", "method", c.Request.Method, "path", c.Request.URL.Path, "status", c.Writer.Status())
+		if c.Request.Method != http.MethodGet || c.Request.URL.Path != "/api/room" {
+
+			slog.Info("api", "method", c.Request.Method, "path", c.Request.URL.Path, "status", c.Writer.Status())
+
+		}
 
 	}
 

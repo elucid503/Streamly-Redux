@@ -1,12 +1,16 @@
 package proxy
 
 import (
+	"context"
 	"encoding/base64"
+	"errors"
 	"io"
 	"log/slog"
 	"net/http"
 	"net/url"
+	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/gin-gonic/gin"
@@ -15,7 +19,13 @@ import (
 // Discord serves the activity under this prefix; requests from the iframe carry it (see _docs/DESIGN.md §2.1).
 const PathPrefix = "/.proxy"
 
-const mediaRoute = "/proxy/media"
+const (
+	mediaRoute = "/proxy/media"
+	imageRoute = "/proxy/image"
+
+	imageAttempts    = 3
+	imageConcurrency = 6
+)
 
 var forwardedHeaders = []string{
 
@@ -23,56 +33,117 @@ var forwardedHeaders = []string{
 	"Content-Length",
 	"Content-Range",
 	"Accept-Ranges",
+}
 
+// Everything a media request needs to reach an upstream that gates on headers and to report its own failure.
+type Media struct {
+	URL    string
+	Source string
+
+	Referer string
+
+	// Room the playback belongs to, so an upstream failure can reach the hub that owns it (§5.2).
+	Room string
 }
 
 type Handler struct {
-
-	http *http.Client
+	http       *http.Client
+	imageHTTP  *http.Client
+	imageSlots chan struct{}
+	// pacedImageSlots serialises Wikimedia-class hosts (one in flight at a time).
+	pacedImageSlots chan struct{}
+	images     *imageCache
+	fonts      *fontCache
 
 	allowAnyOrigin bool
 
+	onFailure func(room string, target string)
+
+	mu          sync.Mutex
+	lastFailure map[string]time.Time
+
+	imageMu        sync.Mutex
+	imageInflight  map[string]*imageFlight
+	imageHostNext  map[string]time.Time
 }
 
 func New(allowAnyOrigin bool) *Handler {
 
 	transport := &http.Transport{
 
-		Proxy: http.ProxyFromEnvironment,
+		Proxy:                 http.ProxyFromEnvironment,
 		ResponseHeaderTimeout: 20 * time.Second,
-
 	}
 
 	httpClient := &http.Client{
 
 		Transport: transport,
+	}
 
+	imageClient := &http.Client{
+
+		Transport: transport,
+		Timeout:   30 * time.Second,
 	}
 
 	return &Handler{
 
-		http: httpClient,
+		http:       httpClient,
+		imageHTTP:  imageClient,
+		imageSlots: make(chan struct{}, imageConcurrency),
+		pacedImageSlots: make(chan struct{}, pacedImageConcurrency),
+		images:     newImageCache(),
+		fonts:      newFontCache(),
 
 		allowAnyOrigin: allowAnyOrigin,
 
+		lastFailure: map[string]time.Time{},
+
+		imageInflight: map[string]*imageFlight{},
+		imageHostNext: map[string]time.Time{},
 	}
 
 }
 
-func MediaURL(target string, source string, referer string) string {
+func (h *Handler) OnFailure(report func(room string, target string)) {
+
+	h.onFailure = report
+
+}
+
+func MediaURL(media Media) string {
 
 	query := url.Values{}
 
-	query.Set("u", encode(target))
-	query.Set("s", source)
+	query.Set("u", encode(media.URL))
+	query.Set("s", media.Source)
 
-	if referer != "" {
+	if media.Referer != "" {
 
-		query.Set("r", encode(referer))
+		query.Set("r", encode(media.Referer))
+
+	}
+
+	if media.Room != "" {
+
+		query.Set("room", media.Room)
 
 	}
 
 	return PathPrefix + mediaRoute + "?" + query.Encode()
+
+}
+
+// Posters, logos, and avatars are blocked at their origin by the activity CSP, so they come through here too (§2.2).
+func ImageURL(target string) string {
+
+	if target == "" {
+
+		return ""
+
+	}
+
+	return PathPrefix + imageRoute + "?u=" + encode(target)
 
 }
 
@@ -88,6 +159,8 @@ func (h *Handler) Media(c *gin.Context) {
 	}
 
 	source := c.Query("s")
+	room := c.Query("room")
+
 	referer, _ := decode(c.Query("r"))
 
 	req, err := http.NewRequestWithContext(c.Request.Context(), http.MethodGet, target.String(), nil)
@@ -112,6 +185,9 @@ func (h *Handler) Media(c *gin.Context) {
 	if err != nil {
 
 		slog.Error("upstream unreachable", "source", source, "target", target.String(), "err", err)
+
+		h.reportFailure(c, room, target.String())
+
 		c.String(http.StatusBadGateway, "upstream unreachable")
 		return
 
@@ -122,6 +198,9 @@ func (h *Handler) Media(c *gin.Context) {
 	if resp.StatusCode >= http.StatusBadRequest {
 
 		slog.Error("upstream error", "source", source, "target", target.String(), "status", resp.StatusCode)
+
+		h.reportFailure(c, room, target.String())
+
 		c.String(http.StatusBadGateway, "upstream error")
 		return
 
@@ -129,7 +208,7 @@ func (h *Handler) Media(c *gin.Context) {
 
 	if isManifest(target, resp.Header.Get("Content-Type")) {
 
-		h.serveManifest(c, resp, target, source, referer)
+		h.serveManifest(c, resp, target, source, referer, room)
 		return
 
 	}
@@ -154,6 +233,62 @@ func (h *Handler) Media(c *gin.Context) {
 
 }
 
+func (h *Handler) Image(c *gin.Context) {
+
+	target, err := decode(c.Query("u"))
+
+	if err != nil || target == nil {
+
+		c.String(http.StatusBadRequest, "bad target")
+		return
+
+	}
+
+	image, err := h.loadImage(c.Request.Context(), target)
+
+	if err != nil {
+
+		c.Header("Cache-Control", "no-store")
+
+		var unavailable *imageUnavailableError
+
+		if errors.As(err, &unavailable) {
+
+			secs := int(unavailable.retryAfter.Seconds())
+
+			if secs < 1 {
+
+				secs = 3
+
+			}
+
+			c.Header("Retry-After", strconv.Itoa(secs))
+			c.Status(http.StatusServiceUnavailable)
+			return
+
+		}
+
+		if errors.Is(err, context.Canceled) {
+
+			c.Status(http.StatusRequestTimeout)
+			return
+
+		}
+
+		slog.Warn("image upstream failed", "host", target.Host, "err", err)
+		c.Header("Retry-After", "2")
+		c.Status(http.StatusBadGateway)
+		return
+
+	}
+
+	c.Header("Content-Type", image.contentType)
+	c.Header("Cache-Control", "public, max-age=86400")
+
+	c.Data(http.StatusOK, image.contentType, image.body)
+
+}
+
 func (h *Handler) OriginCheck() gin.HandlerFunc {
 
 	return func(c *gin.Context) {
@@ -171,13 +306,16 @@ func (h *Handler) OriginCheck() gin.HandlerFunc {
 
 }
 
-func (h *Handler) serveManifest(c *gin.Context, resp *http.Response, target *url.URL, source string, referer *url.URL) {
+func (h *Handler) serveManifest(c *gin.Context, resp *http.Response, target *url.URL, source string, referer *url.URL, room string) {
 
 	body, err := io.ReadAll(resp.Body)
 
 	if err != nil {
 
 		slog.Error("manifest read failed", "source", source, "target", target.String(), "err", err)
+
+		h.reportFailure(c, room, target.String())
+
 		c.String(http.StatusBadGateway, "manifest unreadable")
 		return
 
@@ -193,7 +331,14 @@ func (h *Handler) serveManifest(c *gin.Context, resp *http.Response, target *url
 
 	rewritten := rewriteManifest(body, target, func(absolute string) string {
 
-		return MediaURL(absolute, source, refererValue)
+		return MediaURL(Media{
+
+			URL:    absolute,
+			Source: source,
+
+			Referer: refererValue,
+			Room:    room,
+		})
 
 	})
 

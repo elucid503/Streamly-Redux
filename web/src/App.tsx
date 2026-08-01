@@ -1,17 +1,23 @@
 import { useEffect, useState } from "react";
+import { Loader2 } from "lucide-react";
+import { AnimatePresence, motion } from "framer-motion";
 
-import { Player } from "@/components/player/Player";
+import { BottomNav, type HomeTab } from "@/components/layout/BottomNav";
+import { Notices } from "@/components/Notices";
+import { TooltipProvider } from "@/components/ui/tooltip";
 
-import { getStreamUrl } from "@/lib/api";
+import { RoomProvider, useRoom } from "@/hooks/useRoom";
 import { formatError } from "@/lib/errors";
-import { connect, type AuthUser } from "@/lib/sdk";
-
-const defaultChannelId = "51";
+import { fadeTransition, pageFade } from "@/lib/motion";
+import { connect, type Session } from "@/lib/sdk";
+import { Browse } from "@/screens/Browse";
+import { Live } from "@/screens/Live";
+import { Sports } from "@/screens/Sports";
+import { Watch } from "@/screens/Watch";
 
 export function App() {
 
-  const [user, setUser] = useState<AuthUser | null>(null);
-  const [streamUrl, setStreamUrl] = useState<string | null>(null);
+  const [session, setSession] = useState<Session | null>(null);
   const [step, setStep] = useState("Starting");
   const [error, setError] = useState<string | null>(null);
 
@@ -19,53 +25,9 @@ export function App() {
 
     let cancelled = false;
 
-    const start = async () => {
-
-      try {
-
-        const authenticated = await connect((next) => {
-
-          if (!cancelled) {
-
-            setStep(next);
-
-          }
-
-        });
-
-        if (cancelled) {
-
-          return;
-
-        }
-
-        setUser(authenticated);
-
-        const channelId = new URLSearchParams(window.location.search).get("channel") ?? defaultChannelId;
-
-        const url = await getStreamUrl(channelId);
-
-        if (cancelled) {
-
-          return;
-
-        }
-
-        setStreamUrl(url);
-
-      } catch (caught) {
-
-        if (!cancelled) {
-
-          setError(formatError(caught));
-
-        }
-
-      }
-
-    };
-
-    void start();
+    void connect((next) => !cancelled && setStep(next))
+      .then((established) => !cancelled && setSession(established))
+      .catch((caught: unknown) => !cancelled && setError(formatError(caught)));
 
     return () => {
 
@@ -81,7 +43,7 @@ export function App() {
 
       <Centered>
 
-        <p className="text-red-300">{error}</p>
+        <p className="text-destructive">{error}</p>
 
       </Centered>
 
@@ -89,13 +51,14 @@ export function App() {
 
   }
 
-  if (!user) {
+  if (!session) {
 
     return (
 
       <Centered>
 
-        <p className="text-neutral-400">{step}…</p>
+        <Loader2 className="text-muted-foreground size-5 animate-spin" />
+        <p className="text-muted-foreground">{step}…</p>
 
       </Centered>
 
@@ -105,32 +68,98 @@ export function App() {
 
   return (
 
-    <div className="flex h-full flex-col">
+    <TooltipProvider>
 
-      <header className="flex items-center justify-between px-4 py-2 text-sm">
+      <RoomProvider session={session}>
 
-        <span className="font-medium">Streamly</span>
-        <span className="text-neutral-400">{user.displayName}</span>
+        <Shell />
 
-      </header>
+        <Notices />
 
-      <main className="min-h-0 flex-1">
+      </RoomProvider>
 
-        {streamUrl ? (
+    </TooltipProvider>
 
-          <Player src={streamUrl} />
+  );
 
-        ) : (
+}
 
-          <Centered>
+// Two full-frame modes rather than a persistent sidebar — the activity pane is small (see _docs/DESIGN.md §6.1).
+function Shell() {
 
-            <p className="text-neutral-400">Resolving stream…</p>
+  const { joined, arrivedMidSession } = useRoom();
 
-          </Centered>
+  const [mode, setMode] = useState<"home" | "watch">("home");
+  const [tab, setTab] = useState<HomeTab>("vod");
 
-        )}
+  useEffect(() => {
 
-      </main>
+    if (joined && arrivedMidSession) {
+
+      setMode("watch");
+
+    }
+
+  }, [joined, arrivedMidSession]);
+
+  if (mode === "watch") {
+
+    return (
+
+      <motion.div
+        className="h-full overflow-hidden"
+        initial={{ opacity: 0 }}
+        animate={{ opacity: 1 }}
+        transition={fadeTransition}
+      >
+
+        <Watch arrived={arrivedMidSession} onBrowse={() => setMode("home")} />
+
+      </motion.div>
+
+    );
+
+  }
+
+  return (
+
+    <div className="relative h-full">
+
+      <div className="h-full overflow-y-auto">
+
+        <AnimatePresence mode="wait">
+
+          <motion.div
+            key={tab}
+            className="min-h-full"
+            variants={pageFade}
+            initial="hidden"
+            animate="visible"
+            exit="exit"
+            transition={fadeTransition}
+          >
+
+            {tab === "live" ? (
+
+              <Live onWatch={() => setMode("watch")} />
+
+            ) : tab === "sports" ? (
+
+              <Sports onWatch={() => setMode("watch")} />
+
+            ) : (
+
+              <Browse onWatch={() => setMode("watch")} />
+
+            )}
+
+          </motion.div>
+
+        </AnimatePresence>
+
+      </div>
+
+      <BottomNav tab={tab} onChange={setTab} />
 
     </div>
 
@@ -142,7 +171,7 @@ function Centered({ children }: { children: React.ReactNode }) {
 
   return (
 
-    <div className="flex h-full items-center justify-center p-6 text-center text-sm">
+    <div className="flex h-full flex-col items-center justify-center gap-3 p-6 text-center text-sm">
 
       {children}
 
