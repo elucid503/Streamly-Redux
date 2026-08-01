@@ -220,7 +220,7 @@ export function Sports({ onWatch }: SportsProps) {
 
           {state.item && (
 
-            <Button variant="secondary" onClick={onWatch}>
+            <Button variant="secondary" className="watching-callout" onClick={onWatch}>
 
               <Tv />
               Watching

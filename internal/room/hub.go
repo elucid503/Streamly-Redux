@@ -25,17 +25,19 @@ type Authenticator interface {
 type Hub struct {
 	resolver Resolver
 	auth     Authenticator
+	history  Recorder
 
 	mu    sync.Mutex
 	rooms map[string]*Room
 }
 
-func NewHub(resolver Resolver, authenticator Authenticator) *Hub {
+func NewHub(resolver Resolver, authenticator Authenticator, history Recorder) *Hub {
 
 	return &Hub{
 
 		resolver: resolver,
 		auth:     authenticator,
+		history:  history,
 
 		rooms: map[string]*Room{},
 	}
@@ -50,19 +52,34 @@ func (h *Hub) Attach(ctx context.Context, ws *websocket.Conn) {
 
 func (h *Hub) AttachAuthenticated(ctx context.Context, ws *websocket.Conn, instanceID string, accessToken string) {
 
+	h.AttachAuthenticatedWithGuild(ctx, ws, instanceID, "", accessToken)
+
+}
+
+func (h *Hub) AttachAuthenticatedWithGuild(ctx context.Context, ws *websocket.Conn, instanceID string, guildID string, accessToken string) {
+
 	h.attach(ctx, ws, &ClientFrame{
 
 		Type: "hello",
 
 		InstanceID:  instanceID,
 		AccessToken: accessToken,
+		GuildID:     guildID,
 	})
 
 }
 
 func (h *Hub) Handle(ctx context.Context, instanceID string, user Participant, frame ClientFrame) error {
 
+	return h.HandleWithGuild(ctx, instanceID, "", user, frame)
+
+}
+
+func (h *Hub) HandleWithGuild(ctx context.Context, instanceID string, guildID string, user Participant, frame ClientFrame) error {
+
 	target := h.room(instanceID)
+
+	target.setGuild(guildID)
 
 	actor := &Conn{
 
@@ -167,6 +184,8 @@ func (h *Hub) welcome(ctx context.Context, conn *Conn, frame ClientFrame) bool {
 
 	conn.room = h.room(frame.InstanceID)
 
+	conn.room.setGuild(frame.GuildID)
+
 	conn.room.join(conn)
 
 	slog.Info("participant joined", "room", frame.InstanceID, "user", user.DisplayName)
@@ -187,7 +206,7 @@ func (h *Hub) room(id string) *Room {
 
 	}
 
-	created := newRoom(id, h.resolver)
+	created := newRoom(id, h.resolver, h.history)
 
 	h.rooms[id] = created
 

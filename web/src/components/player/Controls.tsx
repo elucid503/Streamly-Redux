@@ -95,16 +95,16 @@ export function Controls({ handle, volume, muted, onVolume, onMuted }: ControlsP
 
       {!live && (
 
-        <div className="flex w-full items-center gap-2 px-3">
+        <div className="grid w-full grid-cols-[auto_minmax(0,1fr)_auto] items-center gap-x-2 px-4">
 
-          <span className="w-11 shrink-0 text-right font-mono text-xs font-normal tabular-nums text-white/70">
+          <span className="font-mono text-[11px] font-normal tabular-nums tracking-tight text-white/75">
 
             {formatTime(position)}
 
           </span>
 
           <Slider
-            className="min-w-0 flex-1"
+            className="min-w-0"
             value={[position]}
             max={Math.max(handle.duration, 1)}
             step={0.1}
@@ -117,7 +117,7 @@ export function Controls({ handle, volume, muted, onVolume, onMuted }: ControlsP
             }}
           />
 
-          <span className="w-14 shrink-0 font-mono text-xs font-normal tabular-nums text-white/70">
+          <span className="font-mono text-[11px] font-normal tabular-nums tracking-tight text-white/75">
 
             {formatTime(handle.duration)}
 

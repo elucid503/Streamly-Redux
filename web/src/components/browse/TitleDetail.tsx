@@ -94,14 +94,15 @@ export function TitleDetail({ title, onBack, onPlay }: TitleDetailProps) {
 
   const episodes = detail?.seasons.find((entry) => entry.season === season)?.episodes ?? [];
 
-  const itemFor = (episodeNumber?: number, episodeTitle?: string, thumbnail?: string, description?: string): Item => ({
+  const itemFor = (episodeNumber?: number, episodeTitle?: string, _thumbnail?: string, description?: string): Item => ({
 
     kind: "vod",
 
     id: detail?.id ?? title.id,
     title: title.title,
 
-    poster: thumbnail || detail?.poster || title.poster,
+    // Always the title poster — episode stills are for the grid only, not history/player art.
+    poster: detail?.poster || title.poster,
 
     boxType: title.boxType,
 

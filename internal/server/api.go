@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"log/slog"
 	"net/http"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -14,6 +15,7 @@ import (
 	"streamly/internal/auth"
 	"streamly/internal/catalog"
 	"streamly/internal/config"
+	"streamly/internal/history"
 	"streamly/internal/proxy"
 	"streamly/internal/resolve"
 	"streamly/internal/room"
@@ -32,6 +34,8 @@ type api struct {
 
 	auth *auth.Client
 	hub  *room.Hub
+
+	history *history.Store
 
 	catalog  *catalog.Catalog
 	resolver *resolve.Resolver
@@ -203,6 +207,7 @@ func (a *api) roomAction(c *gin.Context) {
 
 	var body struct {
 		InstanceID string           `json:"instanceId"`
+		GuildID    string           `json:"guildId"`
 		Ticket     string           `json:"ticket"`
 		Frame      room.ClientFrame `json:"frame"`
 	}
@@ -233,7 +238,7 @@ func (a *api) roomAction(c *gin.Context) {
 
 	slog.Info("room action received", "room", body.InstanceID, "user", user.DisplayName, "type", body.Frame.Type, "action", body.Frame.Action)
 
-	err = a.hub.Handle(c.Request.Context(), body.InstanceID, room.Participant{
+	err = a.hub.HandleWithGuild(c.Request.Context(), body.InstanceID, body.GuildID, room.Participant{
 
 		UserID: user.ID,
 		Name:   user.DisplayName,
@@ -243,6 +248,183 @@ func (a *api) roomAction(c *gin.Context) {
 	if err != nil {
 
 		c.JSON(http.StatusServiceUnavailable, gin.H{"error": "room action failed"})
+		return
+
+	}
+
+	c.Status(http.StatusNoContent)
+
+}
+
+func (a *api) historyResume(c *gin.Context) {
+
+	guildID := strings.TrimSpace(c.Query("guildId"))
+	ticket := c.Query("ticket")
+	kind := c.Query("kind")
+	id := c.Query("id")
+
+	if guildID == "" || ticket == "" || id == "" {
+
+		c.JSON(http.StatusBadRequest, gin.H{"error": "guildId, ticket, and id are required"})
+		return
+
+	}
+
+	if _, err := a.socketUser(c.Request.Context(), ticket); err != nil {
+
+		c.JSON(http.StatusUnauthorized, gin.H{"error": "authentication failed"})
+		return
+
+	}
+
+	if a.history == nil || kind != string(resolve.KindVOD) {
+
+		c.JSON(http.StatusOK, gin.H{"resume": false})
+		return
+
+	}
+
+	season, _ := strconv.Atoi(c.Query("season"))
+	episode, _ := strconv.Atoi(c.Query("episode"))
+
+	item := resolve.Item{
+
+		Kind: resolve.KindVOD,
+		ID: id,
+		Season: season,
+		Episode: episode,
+
+	}
+
+	positionMs, durationMs, ok := a.history.ResumePosition(c.Request.Context(), guildID, item)
+
+	c.JSON(http.StatusOK, gin.H{
+
+		"resume": ok,
+		"positionMs": positionMs,
+		"durationMs": durationMs,
+
+	})
+
+}
+
+func (a *api) historyList(c *gin.Context) {
+
+	guildID := strings.TrimSpace(c.Query("guildId"))
+	ticket := c.Query("ticket")
+
+	if guildID == "" || ticket == "" {
+
+		c.JSON(http.StatusBadRequest, gin.H{"error": "guildId and ticket are required"})
+		return
+
+	}
+
+	if _, err := a.socketUser(c.Request.Context(), ticket); err != nil {
+
+		c.JSON(http.StatusUnauthorized, gin.H{"error": "authentication failed"})
+		return
+
+	}
+
+	if a.history == nil {
+
+		c.JSON(http.StatusOK, gin.H{"items": []history.Entry{}})
+		return
+
+	}
+
+	items, err := a.history.List(c.Request.Context(), guildID, history.MaxEntries)
+
+	if err != nil {
+
+		slog.Error("history list failed", "err", err)
+		c.JSON(http.StatusBadGateway, gin.H{"error": "history unavailable"})
+		return
+
+	}
+
+	c.JSON(http.StatusOK, gin.H{"items": items})
+
+}
+
+func (a *api) historyProgress(c *gin.Context) {
+
+	var body struct {
+		GuildID string       `json:"guildId"`
+		Ticket  string       `json:"ticket"`
+		Item    resolve.Item `json:"item"`
+
+		PositionMs int64 `json:"positionMs"`
+		DurationMs int64 `json:"durationMs"`
+	}
+
+	if err := c.ShouldBindJSON(&body); err != nil || body.GuildID == "" || body.Ticket == "" || body.Item.ID == "" {
+
+		c.JSON(http.StatusBadRequest, gin.H{"error": "progress payload is invalid"})
+		return
+
+	}
+
+	if _, err := a.socketUser(c.Request.Context(), body.Ticket); err != nil {
+
+		c.JSON(http.StatusUnauthorized, gin.H{"error": "authentication failed"})
+		return
+
+	}
+
+	if a.history == nil {
+
+		c.Status(http.StatusNoContent)
+		return
+
+	}
+
+	if err := a.history.SaveProgress(c.Request.Context(), body.GuildID, body.Item, body.PositionMs, body.DurationMs); err != nil {
+
+		slog.Warn("history progress failed", "err", err)
+		c.JSON(http.StatusBadGateway, gin.H{"error": "could not save progress"})
+		return
+
+	}
+
+	c.Status(http.StatusNoContent)
+
+}
+
+func (a *api) historyClearProgress(c *gin.Context) {
+
+	var body struct {
+		GuildID string       `json:"guildId"`
+		Ticket  string       `json:"ticket"`
+		Item    resolve.Item `json:"item"`
+	}
+
+	if err := c.ShouldBindJSON(&body); err != nil || body.GuildID == "" || body.Ticket == "" || body.Item.ID == "" {
+
+		c.JSON(http.StatusBadRequest, gin.H{"error": "clear payload is invalid"})
+		return
+
+	}
+
+	if _, err := a.socketUser(c.Request.Context(), body.Ticket); err != nil {
+
+		c.JSON(http.StatusUnauthorized, gin.H{"error": "authentication failed"})
+		return
+
+	}
+
+	if a.history == nil {
+
+		c.Status(http.StatusNoContent)
+		return
+
+	}
+
+	if err := a.history.ClearProgress(c.Request.Context(), body.GuildID, body.Item); err != nil {
+
+		slog.Warn("history clear failed", "err", err)
+		c.JSON(http.StatusBadGateway, gin.H{"error": "could not clear progress"})
 		return
 
 	}

@@ -86,6 +86,7 @@ type ClientFrame struct {
 
 	InstanceID string `json:"instanceId"`
 	AccessToken string `json:"accessToken"`
+	GuildID string `json:"guildId,omitempty"`
 
 	T0 int64 `json:"t0"`
 

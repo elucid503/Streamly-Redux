@@ -50,6 +50,7 @@ html[data-mini] {
 @theme inline {
 
   --font-sans: "Inter", ui-sans-serif, system-ui, sans-serif;
+  --font-mono: "JetBrains Mono", ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
 
   --color-background: var(--background);
   --color-foreground: var(--foreground);
@@ -135,6 +136,31 @@ html[data-mini] {
     background-color: transparent;
 
   }
+
+}
+
+/* Call attention to return-to-player when the room is already watching. */
+@keyframes watching-outline {
+
+  0%, 100% {
+
+    outline-color: rgb(239 68 68 / 0.95);
+
+  }
+
+  50% {
+
+    outline-color: rgb(239 68 68 / 0.2);
+
+  }
+
+}
+
+@utility watching-callout {
+
+  outline: 2px solid rgb(239 68 68 / 0.95);
+  outline-offset: 2px;
+  animation: watching-outline 1.5s ease-in-out infinite;
 
 }
 

@@ -22,6 +22,7 @@ func (a *api) socket(c *gin.Context) {
 	slog.Info("websocket upgrade requested", "origin", c.GetHeader("Origin"))
 
 	instanceID := c.Query("instanceId")
+	guildID := c.Query("guildId")
 	accessToken, validTicket := a.consumeSocketTicket(c.Query("ticket"))
 
 	if instanceID == "" || !validTicket {
@@ -45,6 +46,6 @@ func (a *api) socket(c *gin.Context) {
 
 	defer ws.Close()
 
-	a.hub.AttachAuthenticated(c.Request.Context(), ws, instanceID, accessToken)
+	a.hub.AttachAuthenticatedWithGuild(c.Request.Context(), ws, instanceID, guildID, accessToken)
 
 }

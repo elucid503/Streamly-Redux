@@ -10,6 +10,7 @@ import (
 	"streamly/internal/auth"
 	"streamly/internal/catalog"
 	"streamly/internal/config"
+	"streamly/internal/history"
 	"streamly/internal/proxy"
 	"streamly/internal/resolve"
 	"streamly/internal/room"
@@ -48,7 +49,38 @@ func Run(cfg *config.Config) error {
 
 	resolver := resolve.New(channels, live, ntv.New(), box, files)
 
-	hub := room.NewHub(resolver, authenticator)
+	var historyStore *history.Store
+
+	if cfg.MongoURI != "" {
+
+		store, err := history.Open(context.Background(), cfg.MongoURI)
+
+		if err != nil {
+
+			slog.Error("mongo history unavailable", "err", err)
+
+		} else {
+
+			historyStore = store
+			slog.Info("mongo history connected")
+
+		}
+
+	} else {
+
+		slog.Warn("MONGO_URI not set — per-server history disabled")
+
+	}
+
+	var historyRecorder room.Recorder
+
+	if historyStore != nil {
+
+		historyRecorder = historyStore
+
+	}
+
+	hub := room.NewHub(resolver, authenticator, historyRecorder)
 
 	media := proxy.New(cfg.AllowAnyOrigin)
 
@@ -64,6 +96,8 @@ func Run(cfg *config.Config) error {
 
 		auth: authenticator,
 		hub:  hub,
+
+		history: historyStore,
 
 		catalog:  channels,
 		resolver: resolver,
@@ -103,6 +137,12 @@ func Run(cfg *config.Config) error {
 	group.GET("/intro", routes.intro)
 	group.GET("/room", routes.roomState)
 	group.POST("/room", routes.roomAction)
+
+	group.GET("/history", routes.historyList)
+	group.GET("/history/resume", routes.historyResume)
+	group.POST("/history/progress", routes.historyProgress)
+	group.POST("/history/clear-progress", routes.historyClearProgress)
+
 	group.POST("/client-error", routes.clientError)
 
 	engine.GET("/ws", routes.socket)

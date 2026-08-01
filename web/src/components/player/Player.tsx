@@ -4,6 +4,7 @@ import { LibraryBig, Loader2, Play, SkipForward, Volume2 } from "lucide-react";
 import { Controls } from "@/components/player/Controls";
 import { PauseOverlay } from "@/components/player/PauseOverlay";
 import { Presence } from "@/components/player/Presence";
+import { ResumePrompt } from "@/components/player/ResumePrompt";
 import { Button } from "@/components/ui/button";
 
 import { useIntro } from "@/hooks/useIntro";
@@ -11,9 +12,11 @@ import { useMiniMode } from "@/hooks/useMiniMode";
 import { usePlayer } from "@/hooks/usePlayer";
 import { useRoom } from "@/hooks/useRoom";
 import { useSubtitles } from "@/hooks/useSubtitles";
+import { clearHistoryProgress, getHistoryResume, reportHistoryProgress } from "@/lib/api";
 import { cn } from "@/lib/cn";
 
 const chromeIdleMs = 2800;
+const progressIntervalMs = 5000;
 
 interface PlayerProps {
 
@@ -24,7 +27,7 @@ interface PlayerProps {
 export function Player({ onBrowse }: PlayerProps) {
 
   const mini = useMiniMode();
-  const { state, seek, play } = useRoom();
+  const { state, session, seek, play, pause } = useRoom();
 
   const [video, setVideo] = useState<HTMLVideoElement | null>(null);
 
@@ -32,11 +35,21 @@ export function Player({ onBrowse }: PlayerProps) {
   const [muted, setMuted] = useState(true);
   const [chromeVisible, setChromeVisible] = useState(true);
 
+  const [resumeMs, setResumeMs] = useState<number | null>(null);
+  const resumeAsked = useRef<string>("");
+
   const idleTimer = useRef<number | null>(null);
+  const progressRef = useRef({ position: 0, duration: 0 });
 
   const handle = usePlayer(video);
   const intro = useIntro(handle.position, handle.duration);
   const cueText = useSubtitles(state.subtitle, video);
+
+  progressRef.current = { position: handle.position, duration: handle.duration };
+
+  const itemKey = state.item
+    ? `${state.item.kind}:${state.item.id}:${state.item.season ?? 0}:${state.item.episode ?? 0}`
+    : "";
 
   useEffect(() => {
 
@@ -50,6 +63,102 @@ export function Player({ onBrowse }: PlayerProps) {
     video.muted = muted;
 
   }, [video, volume, muted]);
+
+  // Offer resume when this guild last left a VOD mid-watch.
+  useEffect(() => {
+
+    if (!state.item || state.item.kind !== "vod" || !session.guildId) {
+
+      setResumeMs(null);
+      return;
+
+    }
+
+    if (resumeAsked.current === itemKey) {
+
+      return;
+
+    }
+
+    resumeAsked.current = itemKey;
+
+    let cancelled = false;
+
+    void getHistoryResume(session.guildId, session.socketTicket, state.item)
+      .then((result) => {
+
+        if (cancelled || !result.resume || result.positionMs <= 0) {
+
+          if (!cancelled) {
+
+            setResumeMs(null);
+
+          }
+
+          return;
+
+        }
+
+        // Miniplayer has no room for a prompt — jump quietly.
+        if (mini) {
+
+          seek(result.positionMs);
+          setResumeMs(null);
+          return;
+
+        }
+
+        setResumeMs(result.positionMs);
+        pause();
+
+      })
+      .catch(() => {
+
+        if (!cancelled) {
+
+          setResumeMs(null);
+
+        }
+
+      });
+
+    return () => {
+
+      cancelled = true;
+
+    };
+
+  }, [itemKey, session.guildId, session.socketTicket, state.item, mini, seek, pause]);
+
+  // Persist VOD progress every 5s while this room is watching (shared server resume).
+  useEffect(() => {
+
+    if (!state.item || state.item.kind !== "vod" || !session.guildId || resumeMs !== null) {
+
+      return;
+
+    }
+
+    const item = state.item;
+
+    const timer = window.setInterval(() => {
+
+      const positionMs = Math.round(progressRef.current.position * 1000);
+      const durationMs = Math.round(progressRef.current.duration * 1000);
+
+      if (positionMs < 5_000) {
+
+        return;
+
+      }
+
+      void reportHistoryProgress(session.guildId, session.socketTicket, item, positionMs, durationMs).catch(() => undefined);
+
+    }, progressIntervalMs);
+
+    return () => window.clearInterval(timer);
+
+  }, [itemKey, session.guildId, session.socketTicket, resumeMs, state.item]);
 
   const wake = useCallback(() => {
 
@@ -68,7 +177,7 @@ export function Player({ onBrowse }: PlayerProps) {
   useEffect(() => wake(), [wake]);
 
   const title = state.item?.title ?? "Nothing playing";
-  const paused = Boolean(state.item) && !state.playing && !handle.error;
+  const paused = Boolean(state.item) && !state.playing && !handle.error && resumeMs === null;
 
   return (
 
@@ -113,7 +222,37 @@ export function Player({ onBrowse }: PlayerProps) {
 
       )}
 
-      {handle.buffering && !handle.error && state.playing && (
+      {resumeMs !== null && state.item && !mini && (
+
+        <ResumePrompt
+          title={state.item.episodeTitle || state.item.title}
+          positionMs={resumeMs}
+          onContinue={() => {
+
+            seek(resumeMs);
+            setResumeMs(null);
+            setMuted(false);
+            play();
+
+          }}
+          onStartOver={() => {
+
+            if (state.item && session.guildId) {
+
+              void clearHistoryProgress(session.guildId, session.socketTicket, state.item).catch(() => undefined);
+
+            }
+
+            setResumeMs(null);
+            setMuted(false);
+            play();
+
+          }}
+        />
+
+      )}
+
+      {handle.buffering && !handle.error && state.playing && resumeMs === null && (
 
         <div className="pointer-events-none absolute inset-0 flex items-center justify-center">
 
@@ -123,7 +262,7 @@ export function Player({ onBrowse }: PlayerProps) {
 
       )}
 
-      {muted && !handle.error && state.playing && (
+      {muted && !handle.error && state.playing && resumeMs === null && (
 
         <Button
           size={mini ? "sm" : "default"}

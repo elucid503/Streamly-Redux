@@ -99,7 +99,7 @@ export function Live({ onWatch }: LiveProps) {
 
         {state.item && (
 
-          <Button variant="secondary" onClick={onWatch}>
+          <Button variant="secondary" className="watching-callout" onClick={onWatch}>
 
             <Tv />
             Watching

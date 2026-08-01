@@ -86,12 +86,11 @@ export function QueueSheet({ open, onOpenChange, onPlay, showTrigger = true, anc
         <Button
           ref={triggerRef}
           variant="secondary"
-          size="sm"
-          className={cn("gap-2", className)}
+          className={cn(className)}
           onClick={() => onOpenChange(true)}
         >
 
-          <ListVideo className="size-4" />
+          <ListVideo />
           Queue
           {state.queue.length > 0 && (
 

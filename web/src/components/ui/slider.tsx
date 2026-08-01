@@ -36,18 +36,25 @@ function Slider({
     >
       <SliderPrimitive.Track
         data-slot="slider-track"
-        className="bg-white/20 relative h-1 w-full grow overflow-hidden rounded-full"
+        className="relative h-[3px] w-full grow overflow-hidden rounded-full bg-white/20"
       >
         <SliderPrimitive.Range
           data-slot="slider-range"
-          className="bg-white absolute h-full rounded-full"
+          className="absolute h-full rounded-full bg-white"
         />
       </SliderPrimitive.Track>
       {Array.from({ length: _values.length }, (_, index) => (
         <SliderPrimitive.Thumb
           data-slot="slider-thumb"
           key={index}
-          className="border-white bg-white ring-white/30 block size-3 shrink-0 rounded-full border shadow-[0_0_0_1px_rgba(0,0,0,0.35)] transition-[box-shadow] hover:ring-4 focus-visible:ring-4 focus-visible:outline-hidden disabled:pointer-events-none"
+          className={cn(
+            "block size-3.5 shrink-0 rounded-full bg-white",
+            // Solid fill + soft shadow only — borders/rings alias badly on small circles.
+            "shadow-[0_1px_2px_rgba(0,0,0,0.55),0_0_0_1px_rgba(0,0,0,0.25)]",
+            "transition-transform duration-150 ease-out will-change-transform",
+            "hover:scale-110 focus-visible:scale-110 focus-visible:outline-hidden",
+            "disabled:pointer-events-none",
+          )}
         />
       ))}
     </SliderPrimitive.Root>

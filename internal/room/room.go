@@ -17,11 +17,18 @@ type Resolver interface {
 	Play(ctx context.Context, item resolve.Item, sourceIndex int, room string) (*resolve.Playback, error)
 }
 
+// Recorder persists recently played titles per Discord guild (optional).
+type Recorder interface {
+	Record(ctx context.Context, guildID string, item resolve.Item) error
+}
+
 // A room already dies when its last participant leaves, so none of this outlives the process (see _docs/DESIGN.md §2.4).
 type Room struct {
 	id string
+	guildID string
 
 	resolver Resolver
+	history Recorder
 
 	mu sync.Mutex
 
@@ -31,13 +38,14 @@ type Room struct {
 	lastFailover time.Time
 }
 
-func newRoom(id string, resolver Resolver) *Room {
+func newRoom(id string, resolver Resolver, history Recorder) *Room {
 
 	return &Room{
 
 		id: id,
 
 		resolver: resolver,
+		history: history,
 		state: State{
 
 			Queue: []resolve.Item{},
@@ -45,6 +53,22 @@ func newRoom(id string, resolver Resolver) *Room {
 
 		conns: map[*Conn]bool{},
 	}
+
+}
+
+func (r *Room) setGuild(guildID string) {
+
+	if guildID == "" {
+
+		return
+
+	}
+
+	r.mu.Lock()
+
+	r.guildID = guildID
+
+	r.mu.Unlock()
 
 }
 
@@ -284,7 +308,45 @@ func (r *Room) setItem(ctx context.Context, conn *Conn, item *resolve.Item, sour
 
 	}
 
+	r.recordHistory(*item)
+
 	return nil
+
+}
+
+func (r *Room) recordHistory(item resolve.Item) {
+
+	if r.history == nil {
+
+		return
+
+	}
+
+	r.mu.Lock()
+
+	guildID := r.guildID
+
+	r.mu.Unlock()
+
+	if guildID == "" {
+
+		return
+
+	}
+
+	go func() {
+
+		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+
+		defer cancel()
+
+		if err := r.history.Record(ctx, guildID, item); err != nil {
+
+			slog.Warn("history record failed", "guild", guildID, "item", item.Key(), "err", err)
+
+		}
+
+	}()
 
 }
 
@@ -373,6 +435,15 @@ func (r *Room) queueOp(ctx context.Context, conn *Conn, frame ClientFrame) {
 		// Channels are allowed so scheduled sports can be queued before tip-off;
 		// they still bypass autoplay/next while playing (§4.6).
 		if frame.Item == nil || (frame.Item.Kind != resolve.KindVOD && frame.Item.Kind != resolve.KindChannel) {
+
+			r.mu.Unlock()
+			return
+
+		}
+
+		// Refuse duplicates — play used to auto-append, and re-queueing the same
+		// title would stack identical rows in the list.
+		if queueContains(r.state.Queue, *frame.Item) {
 
 			r.mu.Unlock()
 			return
@@ -498,21 +569,41 @@ func (r *Room) Failover(ctx context.Context) {
 
 }
 
+// If the item is already queued, point the index at it. Play must not invent
+// queue entries — only the explicit enqueue op adds items (§4.6).
 func (r *Room) alignQueue(item resolve.Item) {
 
-	for index, queued := range r.state.Queue {
+	if index, ok := queueIndexOf(r.state.Queue, item); ok {
 
-		if queued.Key() == item.Key() {
+		r.state.QueueIndex = index
 
-			r.state.QueueIndex = index
-			return
+	}
+
+}
+
+func queueContains(queue []resolve.Item, item resolve.Item) bool {
+
+	_, ok := queueIndexOf(queue, item)
+
+	return ok
+
+}
+
+func queueIndexOf(queue []resolve.Item, item resolve.Item) (int, bool) {
+
+	key := item.Key()
+
+	for index, queued := range queue {
+
+		if queued.Key() == key {
+
+			return index, true
 
 		}
 
 	}
 
-	r.state.Queue = append(r.state.Queue, item)
-	r.state.QueueIndex = len(r.state.Queue) - 1
+	return -1, false
 
 }
 

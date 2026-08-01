@@ -16,6 +16,8 @@ type Config struct {
 	SubdlAPIKey    string
 	IntroDBToken   string
 
+	MongoURI string
+
 	ListenAddr string
 	StaticDir  string
 
@@ -37,6 +39,8 @@ func Load() (*Config, error) {
 		TMDBAPIKey:     os.Getenv("TMDB_API_KEY"),
 		SubdlAPIKey:    os.Getenv("SUBDL_API_KEY"),
 		IntroDBToken:   os.Getenv("INTRODB_TOKEN"),
+
+		MongoURI: os.Getenv("MONGO_URI"),
 
 		ListenAddr: envOr("LISTEN_ADDR", ":8080"),
 		StaticDir:  envOr("STATIC_DIR", "web/dist"),

@@ -34,7 +34,7 @@ func testRoom() (*Room, *Conn, *stubResolver) {
 
 	resolver := &stubResolver{}
 
-	room := newRoom("instance", resolver)
+	room := newRoom("instance", resolver, nil)
 
 	conn := &Conn{
 
@@ -119,6 +119,106 @@ func TestQueueOpsKeepIndexOnTheCurrentItem(t *testing.T) {
 	if room.state.Queue[0].ID != "c" {
 
 		t.Fatalf("queue head was %q, want c", room.state.Queue[0].ID)
+
+	}
+
+}
+
+func TestSetItemDoesNotAppendToQueue(t *testing.T) {
+
+	room, conn, _ := testRoom()
+
+	existing := resolve.Item{Kind: resolve.KindVOD, ID: "queued", Title: "Queued"}
+	playing := resolve.Item{Kind: resolve.KindVOD, ID: "playing", Title: "Playing"}
+
+	room.state.Queue = []resolve.Item{existing}
+	room.state.QueueIndex = 0
+
+	if err := room.setItem(context.Background(), conn, &playing, 0); err != nil {
+
+		t.Fatalf("setItem: %v", err)
+
+	}
+
+	if len(room.state.Queue) != 1 || room.state.Queue[0].ID != "queued" {
+
+		t.Fatalf("queue was modified: %+v", room.state.Queue)
+
+	}
+
+	if room.state.Item == nil || room.state.Item.ID != "playing" {
+
+		t.Fatalf("item was %+v, want playing", room.state.Item)
+
+	}
+
+}
+
+func TestSetItemOnEmptyQueueStaysEmpty(t *testing.T) {
+
+	room, conn, _ := testRoom()
+
+	playing := resolve.Item{Kind: resolve.KindVOD, ID: "solo", Title: "Solo"}
+
+	if err := room.setItem(context.Background(), conn, &playing, 0); err != nil {
+
+		t.Fatalf("setItem: %v", err)
+
+	}
+
+	if len(room.state.Queue) != 0 {
+
+		t.Fatalf("play leaked into the queue: %+v", room.state.Queue)
+
+	}
+
+}
+
+func TestQueueAddRejectsDuplicates(t *testing.T) {
+
+	room, conn, _ := testRoom()
+
+	item := resolve.Item{Kind: resolve.KindVOD, ID: "a", Title: "A"}
+
+	room.state.Queue = []resolve.Item{item}
+	room.state.QueueIndex = 0
+	room.state.Item = &item
+
+	room.queueOp(context.Background(), conn, ClientFrame{Op: OpAdd, Item: &item})
+
+	if len(room.state.Queue) != 1 {
+
+		t.Fatalf("queue grew to %d, want 1", len(room.state.Queue))
+
+	}
+
+}
+
+func TestSetItemAlignsExistingQueueIndex(t *testing.T) {
+
+	room, conn, _ := testRoom()
+
+	first := resolve.Item{Kind: resolve.KindVOD, ID: "a", Title: "A"}
+	second := resolve.Item{Kind: resolve.KindVOD, ID: "b", Title: "B"}
+
+	room.state.Queue = []resolve.Item{first, second}
+	room.state.QueueIndex = 0
+
+	if err := room.setItem(context.Background(), conn, &second, 0); err != nil {
+
+		t.Fatalf("setItem: %v", err)
+
+	}
+
+	if room.state.QueueIndex != 1 {
+
+		t.Fatalf("queue index was %d, want 1", room.state.QueueIndex)
+
+	}
+
+	if len(room.state.Queue) != 2 {
+
+		t.Fatalf("queue length was %d, want 2", len(room.state.Queue))
 
 	}
 

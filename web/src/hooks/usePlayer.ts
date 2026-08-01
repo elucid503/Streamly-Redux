@@ -10,6 +10,13 @@ const correctionIntervalMs = 2000;
 // A live viewer sits at their own buffer depth; only a gap wider than this is worth a jump (see _docs/DESIGN.md §4.4).
 const liveEdgeToleranceSeconds = 6;
 
+// Deliberate room seeks use the same 2s bar as periodic correction (§4.2). A 400ms bar
+// was firing on play/pause (anchorAt rewrites) and stacking micro-seeks that desynced A/V.
+const deliberateSeekToleranceMs = driftToleranceMs;
+
+// Cap how long we treat a seek as in-flight if "seeked" never arrives.
+const seekLockMs = 1500;
+
 // Most mid-playback rendition failures are transient, so a few quiet retries come before offering alternatives (§5.4).
 const maxRetries = 3;
 
@@ -43,9 +50,25 @@ export function usePlayer(video: HTMLVideoElement | null): PlayerHandle {
   const [attempt, setAttempt] = useState(0);
 
   const retries = useRef(0);
+  const hlsRef = useRef<Hls | null>(null);
+
+  const seekingRef = useRef(false);
+  const pendingSeekRef = useRef<number | null>(null);
+  const seekUnlockTimer = useRef<number | null>(null);
+  const wasStallingRef = useRef(false);
+
+  // Stable snapshots so the correction timer is not torn down on every room poll.
+  const stateRef = useRef(state);
+  const serverNowRef = useRef(serverNow);
+  const liveRef = useRef(false);
+
+  stateRef.current = state;
+  serverNowRef.current = serverNow;
 
   const playback = state.playback;
   const live = state.item?.kind === "channel";
+
+  liveRef.current = Boolean(live);
 
   const qualities = useMemo(() => playback?.qualities ?? [], [playback]);
 
@@ -68,15 +91,108 @@ export function usePlayer(video: HTMLVideoElement | null): PlayerHandle {
 
     setQualityLabel(null);
     retries.current = 0;
+    seekingRef.current = false;
+    pendingSeekRef.current = null;
+
+    if (seekUnlockTimer.current !== null) {
+
+      window.clearTimeout(seekUnlockTimer.current);
+      seekUnlockTimer.current = null;
+
+    }
 
   }, [state.item?.id, state.item?.season, state.item?.episode]);
-
-  const hlsRef = useRef<Hls | null>(null);
 
   // Loading reads the room position once; every later change is handled by correction rather than by reloading.
   const positionAtLoad = useRef(0);
 
   positionAtLoad.current = expectedPosition(state, serverNow()) / 1000;
+
+  const hardSeek = useCallback((element: HTMLVideoElement, seconds: number) => {
+
+    if (!Number.isFinite(seconds) || seconds < 0) {
+
+      return;
+
+    }
+
+    // Coalesce: keep the latest target while a seek is already in flight.
+    // Stacked currentTime writes are a common progressive-MP4 A/V desync trigger.
+    if (seekingRef.current) {
+
+      pendingSeekRef.current = seconds;
+      return;
+
+    }
+
+    const deltaMs = Math.abs(element.currentTime - seconds) * 1000;
+
+    if (deltaMs < 80) {
+
+      return;
+
+    }
+
+    seekingRef.current = true;
+
+    if (seekUnlockTimer.current !== null) {
+
+      window.clearTimeout(seekUnlockTimer.current);
+
+    }
+
+    let settled = false;
+
+    const finish = () => {
+
+      if (settled) {
+
+        return;
+
+      }
+
+      settled = true;
+
+      element.removeEventListener("seeked", finish);
+      element.removeEventListener("error", finish);
+
+      if (seekUnlockTimer.current !== null) {
+
+        window.clearTimeout(seekUnlockTimer.current);
+        seekUnlockTimer.current = null;
+
+      }
+
+      seekingRef.current = false;
+
+      const pending = pendingSeekRef.current;
+
+      pendingSeekRef.current = null;
+
+      if (pending !== null && Math.abs(element.currentTime - pending) * 1000 >= 80) {
+
+        hardSeek(element, pending);
+
+      }
+
+    };
+
+    element.addEventListener("seeked", finish);
+    element.addEventListener("error", finish);
+    seekUnlockTimer.current = window.setTimeout(finish, seekLockMs);
+
+    try {
+
+      element.currentTime = seconds;
+      setPosition(seconds);
+
+    } catch {
+
+      finish();
+
+    }
+
+  }, []);
 
   useEffect(() => {
 
@@ -88,6 +204,8 @@ export function usePlayer(video: HTMLVideoElement | null): PlayerHandle {
 
     setError(null);
     setBuffering(true);
+    seekingRef.current = false;
+    pendingSeekRef.current = null;
 
     const startAt = live ? 0 : positionAtLoad.current;
 
@@ -95,7 +213,7 @@ export function usePlayer(video: HTMLVideoElement | null): PlayerHandle {
 
       if (!live && startAt > 1) {
 
-        video.currentTime = startAt;
+        hardSeek(video, startAt);
 
       }
 
@@ -103,7 +221,11 @@ export function usePlayer(video: HTMLVideoElement | null): PlayerHandle {
 
     if (playback?.kind === "hls" && !video.canPlayType("application/vnd.apple.mpegurl") && Hls.isSupported()) {
 
-      const hls = new Hls({ lowLatencyMode: false, backBufferLength: 30 });
+      const hls = new Hls({
+        lowLatencyMode: false,
+        backBufferLength: 30,
+        maxBufferHole: 0.5,
+      });
 
       hlsRef.current = hls;
 
@@ -125,9 +247,13 @@ export function usePlayer(video: HTMLVideoElement | null): PlayerHandle {
 
             hls.startLoad();
 
-          } else {
+          } else if (data.type === Hls.ErrorTypes.MEDIA_ERROR) {
 
             hls.recoverMediaError();
+
+          } else {
+
+            hls.startLoad();
 
           }
 
@@ -161,7 +287,7 @@ export function usePlayer(video: HTMLVideoElement | null): PlayerHandle {
 
     };
 
-  }, [video, source, playback?.kind, live, attempt]);
+  }, [video, source, playback?.kind, live, attempt, hardSeek]);
 
   useEffect(() => {
 
@@ -173,6 +299,21 @@ export function usePlayer(video: HTMLVideoElement | null): PlayerHandle {
 
     if (state.playing) {
 
+      // Don't call play() mid-seek — resume once the element lands.
+      if (seekingRef.current) {
+
+        const resume = () => {
+
+          void video.play().catch(() => setBuffering(true));
+
+        };
+
+        video.addEventListener("seeked", resume, { once: true });
+
+        return () => video.removeEventListener("seeked", resume);
+
+      }
+
       void video.play().catch(() => setBuffering(true));
 
     } else {
@@ -183,7 +324,8 @@ export function usePlayer(video: HTMLVideoElement | null): PlayerHandle {
 
   }, [video, source, state.playing]);
 
-  // Deliberate room seeks rewrite the anchor; apply them immediately rather than waiting on the drift timer.
+  // Deliberate room seeks rewrite anchorMs; apply those immediately (§4.1 / §4.2).
+  // Key only on anchorMs — play rewrites anchorAt every resume and must not force a seek.
   useEffect(() => {
 
     if (!video || !source || live) {
@@ -194,12 +336,12 @@ export function usePlayer(video: HTMLVideoElement | null): PlayerHandle {
 
     const apply = () => {
 
-      const target = expectedPosition(state, serverNow()) / 1000;
+      const room = stateRef.current;
+      const target = expectedPosition(room, serverNowRef.current()) / 1000;
 
-      if (Math.abs(video.currentTime - target) * 1000 > 400) {
+      if (Math.abs(video.currentTime - target) * 1000 > deliberateSeekToleranceMs) {
 
-        video.currentTime = target;
-        setPosition(target);
+        hardSeek(video, target);
 
       }
 
@@ -216,29 +358,35 @@ export function usePlayer(video: HTMLVideoElement | null): PlayerHandle {
 
     return () => video.removeEventListener("loadedmetadata", apply);
 
-  }, [video, source, live, state.anchorMs, state.anchorAt, state.playing, serverNow]);
+  }, [video, source, live, state.anchorMs, hardSeek]);
 
   const correct = useCallback(() => {
 
-    if (!video || video.readyState < 2) {
+    const element = video;
+
+    if (!element || element.readyState < 2 || seekingRef.current) {
 
       return;
 
     }
 
-    if (live) {
+    const room = stateRef.current;
+    const isLive = liveRef.current;
 
-      if (!state.playing) {
+    if (isLive) {
+
+      if (!room.playing) {
 
         return;
 
       }
 
-      const edge = hlsRef.current?.liveSyncPosition ?? (video.seekable.length > 0 ? video.seekable.end(video.seekable.length - 1) : 0);
+      const edge = hlsRef.current?.liveSyncPosition
+        ?? (element.seekable.length > 0 ? element.seekable.end(element.seekable.length - 1) : 0);
 
-      if (edge > 0 && edge - video.currentTime > liveEdgeToleranceSeconds) {
+      if (edge > 0 && edge - element.currentTime > liveEdgeToleranceSeconds) {
 
-        video.currentTime = edge;
+        hardSeek(element, edge);
 
       }
 
@@ -246,21 +394,21 @@ export function usePlayer(video: HTMLVideoElement | null): PlayerHandle {
 
     }
 
-    if (!state.playing) {
+    if (!room.playing) {
 
       return;
 
     }
 
-    const target = expectedPosition(state, serverNow()) / 1000;
+    const target = expectedPosition(room, serverNowRef.current()) / 1000;
 
-    if (Math.abs(video.currentTime - target) * 1000 > driftToleranceMs) {
+    if (Math.abs(element.currentTime - target) * 1000 > driftToleranceMs) {
 
-      video.currentTime = target;
+      hardSeek(element, target);
 
     }
 
-  }, [video, state, serverNow, live]);
+  }, [video, hardSeek]);
 
   useEffect(() => {
 
@@ -282,22 +430,44 @@ export function usePlayer(video: HTMLVideoElement | null): PlayerHandle {
 
     };
 
-    const onWaiting = () => setBuffering(true);
+    const onWaiting = () => {
+
+      wasStallingRef.current = true;
+      setBuffering(true);
+
+    };
 
     const onPlaying = () => {
 
       setBuffering(false);
       retries.current = 0;
 
+      // After a local stall, recompute expected and jump if needed (§4.1).
+      if (wasStallingRef.current) {
+
+        wasStallingRef.current = false;
+        correct();
+
+      }
+
     };
 
-    const onTime = () => setPosition(video.currentTime);
+    const onTime = () => {
+
+      if (!seekingRef.current) {
+
+        setPosition(video.currentTime);
+
+      }
+
+    };
+
     const onDuration = () => setDuration(Number.isFinite(video.duration) ? video.duration : 0);
 
     // Rolling to the next episode is the queue's whole purpose, including across a season boundary (§4.6).
     const onEnded = () => {
 
-      if (!live) {
+      if (!liveRef.current) {
 
         next();
 
@@ -327,7 +497,7 @@ export function usePlayer(video: HTMLVideoElement | null): PlayerHandle {
 
     };
 
-  }, [video, correct, live, next]);
+  }, [video, correct, next]);
 
   const selectQuality = useCallback((label: string) => {
 

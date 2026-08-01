@@ -74,7 +74,7 @@ export function RoomProvider({ session, children }: { session: Session; children
 
   useEffect(() => {
 
-    const sync = new Sync(session.config.clientId, session.instanceId, session.socketTicket, {
+    const sync = new Sync(session.config.clientId, session.instanceId, session.guildId, session.socketTicket, {
 
       // Whether the room was already watching at the moment of joining decides which screen opens (see _docs/DESIGN.md §6.1).
       onState: (next) => {
@@ -131,7 +131,7 @@ export function RoomProvider({ session, children }: { session: Session; children
 
     };
 
-  }, [session.config.clientId, session.instanceId, session.socketTicket]);
+  }, [session.config.clientId, session.instanceId, session.guildId, session.socketTicket]);
 
   const serverNow = useCallback(() => syncRef.current?.serverNow() ?? Date.now(), []);
 

@@ -1,7 +1,8 @@
-import { useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import { Clapperboard, Tv } from "lucide-react";
 
 import { DiscoveryFilter, filterTitles, type RatingFloor } from "@/components/browse/DiscoveryFilter";
+import { HistoryRow } from "@/components/browse/HistoryRow";
 import { QueueSheet } from "@/components/browse/QueueSheet";
 import { SearchBar } from "@/components/browse/SearchBar";
 import { TitleDetail } from "@/components/browse/TitleDetail";
@@ -13,7 +14,7 @@ import { Button } from "@/components/ui/button";
 
 import { useMiniMode } from "@/hooks/useMiniMode";
 import { useRoom } from "@/hooks/useRoom";
-import { getTrending, search, type SearchResults, type TopPicks } from "@/lib/api";
+import { getHistory, getTrending, search, type HistoryEntry, type SearchResults, type TopPicks } from "@/lib/api";
 import type { Title } from "@/lib/types";
 
 interface BrowseProps {
@@ -26,9 +27,10 @@ interface BrowseProps {
 export function Browse({ onWatch }: BrowseProps) {
 
   const mini = useMiniMode();
-  const { state, session } = useRoom();
+  const { state, session, setItem } = useRoom();
 
   const [picks, setPicks] = useState<TopPicks | null>(null);
+  const [history, setHistory] = useState<HistoryEntry[]>([]);
 
   const [query, setQuery] = useState("");
   const [results, setResults] = useState<SearchResults | null>(null);
@@ -53,6 +55,34 @@ export function Browse({ onWatch }: BrowseProps) {
     }
 
   }, [session.config.vodEnabled]);
+
+  // Refresh when this room starts something new so the home rail stays current.
+  const historyKey = state.item
+    ? `${state.item.kind}:${state.item.id}:${state.item.season ?? 0}:${state.item.episode ?? 0}`
+    : "";
+
+  useEffect(() => {
+
+    if (!session.guildId) {
+
+      setHistory([]);
+      return;
+
+    }
+
+    let cancelled = false;
+
+    void getHistory(session.guildId, session.socketTicket)
+      .then((items) => !cancelled && setHistory(items))
+      .catch(() => !cancelled && setHistory([]));
+
+    return () => {
+
+      cancelled = true;
+
+    };
+
+  }, [session.guildId, session.socketTicket, historyKey]);
 
   useEffect(() => {
 
@@ -122,6 +152,74 @@ export function Browse({ onWatch }: BrowseProps) {
 
   }, [results, rating, genre]);
 
+  const openTitle = useCallback((title: Title) => {
+
+    // Movies skip the detail page and go straight into the room player.
+    if (title.boxType !== 2) {
+
+      setItem({
+        kind: "vod",
+        id: title.id,
+        title: title.title,
+        poster: title.poster,
+        boxType: 1,
+        description: title.description,
+        tmdbId: title.tmdbId,
+      });
+
+      onWatch();
+      return;
+
+    }
+
+    setSelected(title);
+
+  }, [setItem, onWatch]);
+
+  const openHistory = useCallback((entry: HistoryEntry) => {
+
+    if (entry.kind === "channel") {
+
+      setItem({
+        kind: "channel",
+        id: entry.id,
+        title: entry.title,
+        caption: entry.caption,
+        poster: entry.poster,
+      });
+
+      onWatch();
+      return;
+
+    }
+
+    if (entry.boxType === 2) {
+
+      setSelected({
+        id: entry.id,
+        boxType: 2,
+        title: entry.title,
+        year: 0,
+        poster: entry.poster,
+      });
+
+      return;
+
+    }
+
+    setItem({
+      kind: "vod",
+      id: entry.id,
+      title: entry.title,
+      poster: entry.poster,
+      boxType: 1,
+      caption: entry.caption,
+    });
+
+    onWatch();
+
+  }, [setItem, onWatch]);
+
   if (mini) {
 
     return (
@@ -174,7 +272,7 @@ export function Browse({ onWatch }: BrowseProps) {
 
           {state.item && (
 
-            <Button variant="secondary" onClick={onWatch}>
+            <Button variant="secondary" className="watching-callout" onClick={onWatch}>
 
               <Tv />
               Watching
@@ -207,7 +305,7 @@ export function Browse({ onWatch }: BrowseProps) {
 
             <Section title="Movies & series" count={filteredSearchTitles.length}>
 
-              <TitleGrid titles={filteredSearchTitles} onOpen={setSelected} />
+              <TitleGrid titles={filteredSearchTitles} onOpen={openTitle} />
 
             </Section>
 
@@ -225,11 +323,13 @@ export function Browse({ onWatch }: BrowseProps) {
 
         <>
 
-          <TitleRow title="Trending movies" count={filteredMovies.length} titles={filteredMovies} onOpen={setSelected} />
+          <HistoryRow items={history} onSelect={openHistory} />
 
-          <TitleRow title="Trending series" count={filteredSeries.length} titles={filteredSeries} onOpen={setSelected} />
+          <TitleRow title="Trending movies" count={filteredMovies.length} titles={filteredMovies} onOpen={openTitle} />
 
-          <TitleRow title="In theaters" count={filteredNowPlaying.length} titles={filteredNowPlaying} onOpen={setSelected} />
+          <TitleRow title="Trending series" count={filteredSeries.length} titles={filteredSeries} onOpen={openTitle} />
+
+          <TitleRow title="In theaters" count={filteredNowPlaying.length} titles={filteredNowPlaying} onOpen={openTitle} />
 
         </>
 

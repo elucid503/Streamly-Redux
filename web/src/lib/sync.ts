@@ -36,6 +36,7 @@ export class Sync {
 
     private readonly clientId: string,
     private readonly instanceId: string,
+    private readonly guildId: string,
     private readonly socketTicket: string,
     private readonly handlers: SyncHandlers,
 
@@ -101,7 +102,12 @@ export class Sync {
 
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ instanceId: this.instanceId, ticket: this.socketTicket, frame }),
+      body: JSON.stringify({
+        instanceId: this.instanceId,
+        guildId: this.guildId,
+        ticket: this.socketTicket,
+        frame,
+      }),
 
     }).then(async (response) => {
 
@@ -177,7 +183,17 @@ export class Sync {
 
     this.handlers.onStatus("connecting");
 
-    const query = new URLSearchParams({ instanceId: this.instanceId, ticket: this.socketTicket });
+    const query = new URLSearchParams({
+      instanceId: this.instanceId,
+      ticket: this.socketTicket,
+    });
+
+    if (this.guildId) {
+
+      query.set("guildId", this.guildId);
+
+    }
+
     const socket = new WebSocket(`wss://${this.clientId}.discordsays.com/ws?${query.toString()}`);
 
     this.socket = socket;

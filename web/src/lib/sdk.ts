@@ -18,6 +18,7 @@ export interface Session {
   accessToken: string;
   socketTicket: string;
   instanceId: string;
+  guildId: string;
 
   config: AppConfig;
 
@@ -175,6 +176,7 @@ async function run(onStep: (step: string) => void): Promise<Session> {
     accessToken,
     socketTicket,
     instanceId: params.get("instance_id") ?? sdk.instanceId,
+    guildId: params.get("guild_id") ?? "",
 
     config,
 
