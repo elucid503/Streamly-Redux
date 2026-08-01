@@ -465,11 +465,12 @@ export function usePlayer(video: HTMLVideoElement | null): PlayerHandle {
     const onDuration = () => setDuration(Number.isFinite(video.duration) ? video.duration : 0);
 
     // Rolling to the next episode is the queue's whole purpose, including across a season boundary (§4.6).
+    // Pass the finishing item so every client firing "ended" cannot skip queue entries.
     const onEnded = () => {
 
       if (!liveRef.current) {
 
-        next();
+        next(stateRef.current.item);
 
       }
 

@@ -36,6 +36,10 @@ type Room struct {
 	conns map[*Conn]bool
 
 	lastFailover time.Time
+
+	// Item key whose autoplay-next was already accepted; blocks multi-client "ended" races
+	// until setItem lands a different title.
+	consumedAutoplay string
 }
 
 func newRoom(id string, resolver Resolver, history Recorder) *Room {
@@ -141,11 +145,12 @@ func (r *Room) control(ctx context.Context, conn *Conn, frame ClientFrame) error
 
 	case ActionNext:
 
-		return r.step(ctx, conn, 1)
+		// Autoplay sends the ending item so concurrent multi-client ended events only advance once.
+		return r.step(ctx, conn, 1, frame.Item)
 
 	case ActionPrev:
 
-		return r.step(ctx, conn, -1)
+		return r.step(ctx, conn, -1, nil)
 
 	default:
 
@@ -250,6 +255,11 @@ func (r *Room) setItem(ctx context.Context, conn *Conn, item *resolve.Item, sour
 
 		slog.Error("resolve failed", "room", r.id, "item", item.Key(), "err", err)
 
+		// Allow a later autoplay/next retry after a failed resolve.
+		r.mu.Lock()
+		r.consumedAutoplay = ""
+		r.mu.Unlock()
+
 		if errors.Is(err, resolve.ErrProviderAuth) {
 
 			r.notice(nil, NoticeError, "The Febbox session has expired — VOD is unavailable until it is refreshed")
@@ -277,11 +287,11 @@ func (r *Room) setItem(ctx context.Context, conn *Conn, item *resolve.Item, sour
 
 	r.state.Subtitle = nil
 
-	if item.Kind == resolve.KindVOD {
+	// New title is live — allow a future autoplay-next for this key when it eventually ends.
+	r.consumedAutoplay = ""
 
-		r.alignQueue(*item)
-
-	}
+	// Queue is "up next" only: once something starts, drop it from the list.
+	r.consumeFromQueue(*item)
 
 	if conn != nil {
 
@@ -297,6 +307,7 @@ func (r *Room) setItem(ctx context.Context, conn *Conn, item *resolve.Item, sour
 	}
 
 	state := r.state
+	state.Queue = append([]resolve.Item(nil), r.state.Queue...)
 
 	r.mu.Unlock()
 
@@ -379,7 +390,12 @@ func (r *Room) clear(conn *Conn) {
 }
 
 // next and prev have no meaning while a channel is playing and are inert in that state (§4.6).
-func (r *Room) step(ctx context.Context, conn *Conn, delta int) error {
+// from, when set, is the item the client believes is ending — used so multi-client autoplay
+// does not skip entries when several browsers fire "ended" at once.
+//
+// The queue is pure "up next": next always starts the head. Prev is a no-op (consumed titles
+// are gone; rewatch is re-queue / play from browse).
+func (r *Room) step(ctx context.Context, conn *Conn, delta int, from *resolve.Item) error {
 
 	r.mu.Lock()
 
@@ -390,18 +406,53 @@ func (r *Room) step(ctx context.Context, conn *Conn, delta int) error {
 
 	}
 
-	target := r.state.QueueIndex + delta
-
-	if target < 0 || target >= len(r.state.Queue) {
+	if delta <= 0 {
 
 		r.mu.Unlock()
 		return nil
 
 	}
 
-	r.state.QueueIndex = target
+	// Autoplay carries the finishing item. Reject once a peer already advanced past it,
+	// or once this room accepted an autoplay-next for that same key (resolve is still in flight).
+	if from != nil {
 
-	item := r.state.Queue[target]
+		fromKey := from.Key()
+
+		if r.consumedAutoplay == fromKey {
+
+			r.mu.Unlock()
+			return nil
+
+		}
+
+		if r.state.Item != nil && r.state.Item.Key() != fromKey {
+
+			r.mu.Unlock()
+			return nil
+
+		}
+
+		r.consumedAutoplay = fromKey
+
+	}
+
+	// Drop the finishing title if it somehow remained (e.g. legacy state); head is next up.
+	if r.state.Item != nil {
+
+		r.consumeFromQueue(*r.state.Item)
+
+	}
+
+	if len(r.state.Queue) == 0 {
+
+		r.mu.Unlock()
+		return nil
+
+	}
+
+	r.state.QueueIndex = 0
+	item := r.state.Queue[0]
 
 	r.mu.Unlock()
 
@@ -427,6 +478,10 @@ func (r *Room) snapshot() (State, []Participant) {
 func (r *Room) queueOp(ctx context.Context, conn *Conn, frame ClientFrame) {
 
 	r.mu.Lock()
+
+	// Pin the resume cursor by key before mutating so move/remove cannot leave QueueIndex
+	// pointing at a different title (or past the end of the slice).
+	cursorKey := r.queueCursorKey()
 
 	switch frame.Op {
 
@@ -463,12 +518,6 @@ func (r *Room) queueOp(ctx context.Context, conn *Conn, frame ClientFrame) {
 
 		r.state.Queue = append(r.state.Queue[:frame.Index], r.state.Queue[frame.Index+1:]...)
 
-		if frame.Index < r.state.QueueIndex {
-
-			r.state.QueueIndex--
-
-		}
-
 	case OpMove:
 
 		if !inRange(frame.Index, len(r.state.Queue)) || !inRange(frame.To, len(r.state.Queue)) {
@@ -491,11 +540,14 @@ func (r *Room) queueOp(ctx context.Context, conn *Conn, frame ClientFrame) {
 
 	}
 
+	r.restoreQueueCursor(cursorKey)
+
 	empty := r.state.Item == nil
 
 	next := r.currentQueued()
 
 	state := r.state
+	state.Queue = append([]resolve.Item(nil), r.state.Queue...)
 
 	r.mu.Unlock()
 
@@ -504,6 +556,58 @@ func (r *Room) queueOp(ctx context.Context, conn *Conn, frame ClientFrame) {
 	if empty && next != nil && frame.Op == OpAdd {
 
 		r.setItem(ctx, conn, next, 0)
+
+	}
+
+}
+
+// queueCursorKey is the upcoming row the room should return to after a channel.
+// Playing titles are not kept in the queue, so this is always an "up next" pointer.
+func (r *Room) queueCursorKey() string {
+
+	if r.state.QueueIndex < 0 || r.state.QueueIndex >= len(r.state.Queue) {
+
+		return ""
+
+	}
+
+	return r.state.Queue[r.state.QueueIndex].Key()
+
+}
+
+func (r *Room) restoreQueueCursor(cursorKey string) {
+
+	if cursorKey != "" {
+
+		for index, item := range r.state.Queue {
+
+			if item.Key() == cursorKey {
+
+				r.state.QueueIndex = index
+				return
+
+			}
+
+		}
+
+	}
+
+	if len(r.state.Queue) == 0 {
+
+		r.state.QueueIndex = 0
+		return
+
+	}
+
+	if r.state.QueueIndex >= len(r.state.Queue) {
+
+		r.state.QueueIndex = len(r.state.Queue) - 1
+
+	}
+
+	if r.state.QueueIndex < 0 {
+
+		r.state.QueueIndex = 0
 
 	}
 
@@ -569,15 +673,21 @@ func (r *Room) Failover(ctx context.Context) {
 
 }
 
-// If the item is already queued, point the index at it. Play must not invent
-// queue entries — only the explicit enqueue op adds items (§4.6).
-func (r *Room) alignQueue(item resolve.Item) {
+// consumeFromQueue removes a title that has started playing. The list is only "up next".
+func (r *Room) consumeFromQueue(item resolve.Item) {
 
-	if index, ok := queueIndexOf(r.state.Queue, item); ok {
+	index, ok := queueIndexOf(r.state.Queue, item)
 
-		r.state.QueueIndex = index
+	if !ok {
+
+		return
 
 	}
+
+	r.state.Queue = append(r.state.Queue[:index], r.state.Queue[index+1:]...)
+
+	// Remaining rows stay in order; the next autoplay/skip is always the new head.
+	r.state.QueueIndex = 0
 
 }
 
@@ -609,13 +719,22 @@ func queueIndexOf(queue []resolve.Item, item resolve.Item) (int, bool) {
 
 func (r *Room) currentQueued() *resolve.Item {
 
-	if r.state.QueueIndex < 0 || r.state.QueueIndex >= len(r.state.Queue) {
+	if len(r.state.Queue) == 0 {
 
 		return nil
 
 	}
 
-	item := r.state.Queue[r.state.QueueIndex]
+	// Prefer the resume cursor when it is still valid; otherwise the head of "up next".
+	index := r.state.QueueIndex
+
+	if index < 0 || index >= len(r.state.Queue) {
+
+		index = 0
+
+	}
+
+	item := r.state.Queue[index]
 
 	return &item
 

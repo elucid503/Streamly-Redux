@@ -6,13 +6,7 @@ const inflight = new Map<string, Promise<Cue[]>>();
 
 export function subtitleUrl(track: SubtitleTrack): string {
 
-  // Prefer the stable path id — room-state URLs can get mangled across proxies.
-  if (track.id) {
-
-    return `/.proxy/api/subtitle?path=${encodeURIComponent(track.id)}`;
-
-  }
-
+  // Prefer the server-built URL so season/episode query params survive for zip member selection.
   if (track.url) {
 
     if (track.url.startsWith("/api/")) {
@@ -27,7 +21,18 @@ export function subtitleUrl(track: SubtitleTrack): string {
 
     }
 
-    return track.url;
+    if (track.url.startsWith("http://") || track.url.startsWith("https://")) {
+
+      return track.url;
+
+    }
+
+  }
+
+  // Fallback for room-state tracks that only retained the path id.
+  if (track.id) {
+
+    return `/.proxy/api/subtitle?path=${encodeURIComponent(track.id)}`;
 
   }
 

@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { ArrowLeft, Clapperboard, ListPlus, Play, Star } from "lucide-react";
 
 import { PageLoader } from "@/components/PageLoader";
@@ -6,20 +6,30 @@ import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 
 import { useRoom } from "@/hooks/useRoom";
-import { getTitle } from "@/lib/api";
+import { getTitle, type HistoryEntry } from "@/lib/api";
+import { cn } from "@/lib/cn";
 import { movieCaption } from "@/lib/titleMeta";
 import type { Episode, Item, Title, TitleDetail as Detail } from "@/lib/types";
 
 interface TitleDetailProps {
 
   title: Title;
+  history?: HistoryEntry[];
 
   onBack: () => void;
   onPlay: () => void;
 
 }
 
-export function TitleDetail({ title, onBack, onPlay }: TitleDetailProps) {
+interface EpisodeProgress {
+
+  positionMs: number;
+  durationMs: number;
+  fraction: number;
+
+}
+
+export function TitleDetail({ title, history = [], onBack, onPlay }: TitleDetailProps) {
 
   const { setItem, enqueue } = useRoom();
 
@@ -95,15 +105,60 @@ export function TitleDetail({ title, onBack, onPlay }: TitleDetailProps) {
 
   const episodes = detail?.seasons.find((entry) => entry.season === season)?.episodes ?? [];
 
-  const itemFor = (episodeNumber?: number, episodeTitle?: string, _thumbnail?: string, description?: string): Item => ({
+  // Guild history is episode-keyed — map this title's partial watches for the grid.
+  const progressByEpisode = useMemo(() => {
+
+    const map = new Map<string, EpisodeProgress>();
+
+    for (const entry of history) {
+
+      if (entry.kind !== "vod" || entry.id !== title.id) {
+
+        continue;
+
+      }
+
+      if (!entry.season || !entry.episode) {
+
+        continue;
+
+      }
+
+      const durationMs = entry.durationMs ?? 0;
+      const positionMs = entry.positionMs ?? 0;
+
+      if (durationMs <= 0 || positionMs <= 0) {
+
+        continue;
+
+      }
+
+      const fraction = Math.min(1, positionMs / durationMs);
+
+      // Near-complete watches don't need a progress cue on the picker.
+      if (fraction >= 0.95) {
+
+        continue;
+
+      }
+
+      map.set(`${entry.season}:${entry.episode}`, { positionMs, durationMs, fraction });
+
+    }
+
+    return map;
+
+  }, [history, title.id]);
+
+  const itemFor = (episodeNumber?: number, episodeTitle?: string, thumbnail?: string, description?: string): Item => ({
 
     kind: "vod",
 
     id: detail?.id ?? title.id,
     title: title.title,
 
-    // Always the title poster — episode stills are for the grid only, not history/player art.
-    poster: detail?.poster || title.poster,
+    // Prefer the episode still so pause/history art matches what was playing.
+    poster: thumbnail || detail?.poster || title.poster,
 
     boxType: title.boxType,
 
@@ -299,73 +354,95 @@ export function TitleDetail({ title, onBack, onPlay }: TitleDetailProps) {
 
           <div className="grid w-full min-w-0 grid-cols-1 gap-2 lg:grid-cols-2">
 
-            {episodes.map((episode) => (
+            {episodes.map((episode) => {
 
-              <div key={episode.episode} className="flex min-w-0 max-w-full items-center gap-3 rounded-lg border bg-card p-2">
+              const progress = progressByEpisode.get(`${season}:${episode.episode}`);
 
-                <div className="bg-secondary/50 relative h-16 w-28 shrink-0 overflow-hidden rounded-md">
+              return (
 
-                  {episode.thumbnail ? (
-
-                    <img src={episode.thumbnail} alt="" className="size-full object-cover" />
-
-                  ) : (detail.poster ?? title.poster) ? (
-
-                    <img src={detail.poster ?? title.poster} alt="" className="size-full object-cover opacity-50" />
-
-                  ) : (
-
-                    <div className="text-muted-foreground flex size-full items-center justify-center font-mono text-xs">
-
-                      E{episode.episode}
-
-                    </div>
-
+                <div
+                  key={episode.episode}
+                  className={cn(
+                    "flex min-w-0 max-w-full items-center gap-3 rounded-lg border bg-card p-2",
+                    progress && "ring-primary/40 border-primary/30 ring-1",
                   )}
+                >
+
+                  <div className="bg-secondary/50 relative h-16 w-28 shrink-0 overflow-hidden rounded-md">
+
+                    {episode.thumbnail ? (
+
+                      <img src={episode.thumbnail} alt="" className="size-full object-cover" />
+
+                    ) : (detail.poster ?? title.poster) ? (
+
+                      <img src={detail.poster ?? title.poster} alt="" className="size-full object-cover opacity-50" />
+
+                    ) : (
+
+                      <div className="text-muted-foreground flex size-full items-center justify-center font-mono text-xs">
+
+                        E{episode.episode}
+
+                      </div>
+
+                    )}
+
+                    {progress && (
+
+                      <div className="absolute inset-x-0 bottom-0 z-10 h-1 bg-black/50">
+
+                        <div className="bg-primary h-full" style={{ width: `${progress.fraction * 100}%` }} />
+
+                      </div>
+
+                    )}
+
+                  </div>
+
+                  <div className="min-w-0 flex-1 overflow-hidden">
+
+                    <p className="text-muted-foreground font-mono text-[11px]">E{episode.episode}</p>
+                    <p className="truncate text-sm font-medium">{episode.title || `Episode ${episode.episode}`}</p>
+
+                    {episode.description && (
+
+                      <p className="text-muted-foreground mt-0.5 truncate text-xs">{episode.description}</p>
+
+                    )}
+
+                  </div>
+
+                  <div className="mr-1 flex shrink-0 flex-row gap-0.5">
+
+                    <Button
+                      variant="ghost"
+                      size="icon-sm"
+                      onClick={() => {
+
+                        setItem(itemFor(episode.episode, episode.title, episode.thumbnail, episode.description));
+                        onPlay();
+
+                      }}
+                    >
+
+                      <Play />
+
+                    </Button>
+
+                    <Button variant="ghost" size="icon-sm" onClick={() => enqueue(itemFor(episode.episode, episode.title, episode.thumbnail, episode.description))}>
+
+                      <ListPlus />
+
+                    </Button>
+
+                  </div>
 
                 </div>
 
-                <div className="min-w-0 flex-1 overflow-hidden">
+              );
 
-                  <p className="text-muted-foreground font-mono text-[11px]">E{episode.episode}</p>
-                  <p className="truncate text-sm font-medium">{episode.title || `Episode ${episode.episode}`}</p>
-
-                  {episode.description && (
-
-                    <p className="text-muted-foreground mt-0.5 truncate text-xs">{episode.description}</p>
-
-                  )}
-
-                </div>
-
-                <div className="mr-1 flex shrink-0 flex-row gap-0.5">
-
-                  <Button
-                    variant="ghost"
-                    size="icon-sm"
-                    onClick={() => {
-
-                      setItem(itemFor(episode.episode, episode.title, episode.thumbnail, episode.description));
-                      onPlay();
-
-                    }}
-                  >
-
-                    <Play />
-
-                  </Button>
-
-                  <Button variant="ghost" size="icon-sm" onClick={() => enqueue(itemFor(episode.episode, episode.title, episode.thumbnail, episode.description))}>
-
-                    <ListPlus />
-
-                  </Button>
-
-                </div>
-
-              </div>
-
-            ))}
+            })}
 
           </div>
 

@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"path/filepath"
 	"regexp"
 	"strings"
 	"unicode/utf8"
@@ -15,12 +16,19 @@ var ErrNoSubtitleFile = errors.New("subdl: archive contained no subtitle file")
 
 var timingLine = regexp.MustCompile(`(\d{1,2}:\d{2}:\d{2}),(\d{1,3})\s*-->\s*(\d{1,2}:\d{2}:\d{2}),(\d{1,3})`)
 
+type zipCandidate struct {
+
+	Name string
+	Payload []byte
+
+}
+
 // SubDL returns SRT and ZIP; browsers take neither, so this is the one content transform in the system.
-func toWebVTT(raw []byte) ([]byte, error) {
+func toWebVTT(raw []byte, season, episode int) ([]byte, error) {
 
-	if bytes.HasPrefix(raw, []byte("PK\x03\x04")) {
+	if len(raw) >= 4 && raw[0] == 'P' && raw[1] == 'K' {
 
-		unpacked, err := unzip(raw)
+		unpacked, err := extractFromZip(raw, season, episode)
 
 		if err != nil {
 
@@ -29,6 +37,14 @@ func toWebVTT(raw []byte) ([]byte, error) {
 		}
 
 		raw = unpacked
+
+	} else if !looksLikeSubtitle(raw) {
+
+		return nil, ErrNoSubtitleFile
+
+	} else if !looksEnglishSubtitle(raw) {
+
+		return nil, ErrNoSubtitleFile
 
 	}
 
@@ -70,9 +86,9 @@ func padMs(value string) string {
 
 }
 
-func unzip(raw []byte) ([]byte, error) {
+func extractFromZip(data []byte, season, episode int) ([]byte, error) {
 
-	archive, err := zip.NewReader(bytes.NewReader(raw), int64(len(raw)))
+	archive, err := zip.NewReader(bytes.NewReader(data), int64(len(data)))
 
 	if err != nil {
 
@@ -80,31 +96,112 @@ func unzip(raw []byte) ([]byte, error) {
 
 	}
 
+	var episodeMatches []zipCandidate
+	var fallback []zipCandidate
+
 	for _, file := range archive.File {
 
-		name := strings.ToLower(file.Name)
+		ext := strings.ToLower(filepath.Ext(file.Name))
 
-		if !strings.HasSuffix(name, ".srt") && !strings.HasSuffix(name, ".vtt") {
+		switch ext {
+
+		case ".srt", ".vtt", ".ass", ".ssa":
+
+		default:
 
 			continue
 
 		}
 
-		reader, err := file.Open()
+		if !looksEnglishName(file.Name) {
 
-		if err != nil {
-
-			return nil, err
+			continue
 
 		}
 
-		defer reader.Close()
+		opened, err := file.Open()
 
-		return io.ReadAll(io.LimitReader(reader, maxBodyBytes))
+		if err != nil {
+
+			continue
+
+		}
+
+		payload, err := io.ReadAll(io.LimitReader(opened, maxBodyBytes))
+		opened.Close()
+
+		if err != nil || len(payload) == 0 {
+
+			continue
+
+		}
+
+		candidate := zipCandidate{Name: file.Name, Payload: payload}
+
+		if season > 0 && episode > 0 && nameMatchesEpisode(file.Name, season, episode) {
+
+			episodeMatches = append(episodeMatches, candidate)
+			continue
+
+		}
+
+		if episode > 0 && nameMatchesEpisode(file.Name, 0, episode) {
+
+			episodeMatches = append(episodeMatches, candidate)
+			continue
+
+		}
+
+		fallback = append(fallback, candidate)
+
+	}
+
+	if payload := pickZipCandidate(episodeMatches); payload != nil {
+
+		return payload, nil
+
+	}
+
+	if payload := pickZipCandidate(fallback); payload != nil {
+
+		return payload, nil
 
 	}
 
 	return nil, ErrNoSubtitleFile
+
+}
+
+func pickZipCandidate(candidates []zipCandidate) []byte {
+
+	for _, candidate := range candidates {
+
+		if looksEnglishSubtitle(candidate.Payload) {
+
+			return candidate.Payload
+
+		}
+
+	}
+
+	return nil
+
+}
+
+func looksLikeSubtitle(data []byte) bool {
+
+	limit := len(data)
+
+	if limit > 512 {
+
+		limit = 512
+
+	}
+
+	text := strings.ToLower(string(data[:limit]))
+	trimmed := strings.TrimSpace(text)
+
+	return strings.Contains(text, "-->") || strings.HasPrefix(trimmed, "webvtt") || strings.HasPrefix(trimmed, "[script info]")
 
 }
 

@@ -2,7 +2,7 @@ import { ChevronDown, ChevronUp, ListVideo, Play, X } from "lucide-react";
 
 import { Button } from "@/components/ui/button";
 import { useRoom } from "@/hooks/useRoom";
-import { cn } from "@/lib/cn";
+import type { Item } from "@/lib/types";
 
 interface QueueProps {
 
@@ -10,7 +10,7 @@ interface QueueProps {
 
 }
 
-// VOD only — tuning to a channel leaves this untouched, and stopping the channel comes back to it (see _docs/DESIGN.md §4.6).
+// Up-next list only — starting a row consumes it server-side (see _docs/DESIGN.md §4.6).
 export function Queue({ onPlay }: QueueProps) {
 
   const { state, setItem, dequeue, reorder } = useRoom();
@@ -37,11 +37,8 @@ export function Queue({ onPlay }: QueueProps) {
       {state.queue.map((item, index) => (
 
         <div
-          key={`${item.id}-${item.season ?? 0}-${item.episode ?? 0}`}
-          className={cn(
-            "bg-card flex items-center gap-3 rounded-lg border p-2 pl-3",
-            index === state.queueIndex && state.item?.kind === "vod" && "border-primary",
-          )}
+          key={queueRowKey(item)}
+          className="bg-card flex items-center gap-3 rounded-lg border p-2 pl-3"
         >
 
           <div className="min-w-0 flex-1">
@@ -106,5 +103,11 @@ export function Queue({ onPlay }: QueueProps) {
     </div>
 
   );
+
+}
+
+function queueRowKey(item: Item): string {
+
+  return `${item.kind}:${item.id}:${item.season ?? 0}:${item.episode ?? 0}`;
 
 }

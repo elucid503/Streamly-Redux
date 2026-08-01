@@ -205,7 +205,8 @@ export function Browse({ onWatch }: BrowseProps) {
 
     }
 
-    if (entry.boxType === 2) {
+    // Series without a saved episode can't resume in-place — fall back to the detail page.
+    if (entry.boxType === 2 && !(entry.season && entry.episode)) {
 
       setSelected({
         id: entry.id,
@@ -224,9 +225,12 @@ export function Browse({ onWatch }: BrowseProps) {
       id: entry.id,
       title: entry.title,
       poster: entry.poster,
-      boxType: 1,
+      boxType: entry.boxType === 2 ? 2 : 1,
       caption: entry.caption,
       description: entry.description,
+      season: entry.season,
+      episode: entry.episode,
+      episodeTitle: entry.episodeTitle,
     });
 
     onWatch();
@@ -252,7 +256,7 @@ export function Browse({ onWatch }: BrowseProps) {
 
       <div className="min-h-full w-full min-w-0 px-4 pt-4 pb-[var(--bottom-dock-clearance)] sm:px-6 sm:pt-6 lg:px-8 lg:pt-8">
 
-        <TitleDetail title={selected} onBack={() => setSelected(null)} onPlay={onWatch} />
+        <TitleDetail title={selected} history={history} onBack={() => setSelected(null)} onPlay={onWatch} />
 
       </div>
 

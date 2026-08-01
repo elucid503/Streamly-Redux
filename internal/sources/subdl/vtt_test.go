@@ -11,7 +11,7 @@ const sampleSRT = "1\r\n00:00:01,500 --> 00:00:04,000\r\nI must not fear.\r\n\r\
 
 func TestSRTBecomesWebVTT(t *testing.T) {
 
-	out, err := toWebVTT([]byte(sampleSRT))
+	out, err := toWebVTT([]byte(sampleSRT), 0, 0)
 
 	if err != nil {
 
@@ -50,7 +50,7 @@ func TestSRTBecomesWebVTT(t *testing.T) {
 
 func TestExistingWebVTTIsLeftAlone(t *testing.T) {
 
-	out, err := toWebVTT([]byte("WEBVTT\n\n00:00:01.000 --> 00:00:02.000\nAlready fine.\n"))
+	out, err := toWebVTT([]byte("WEBVTT\n\n00:00:01.000 --> 00:00:02.000\nAlready fine.\n"), 0, 0)
 
 	if err != nil {
 
@@ -69,16 +69,13 @@ func TestExistingWebVTTIsLeftAlone(t *testing.T) {
 func TestArchiveIsUnpacked(t *testing.T) {
 
 	buffer := &bytes.Buffer{}
-
 	archive := zip.NewWriter(buffer)
 
 	// Archives routinely carry a readme alongside the subtitle.
 	notes, _ := archive.Create("readme.txt")
-
 	_, _ = notes.Write([]byte("ignore me"))
 
 	entry, _ := archive.Create("Dune.2021.1080p.srt")
-
 	_, _ = entry.Write([]byte(sampleSRT))
 
 	if err := archive.Close(); err != nil {
@@ -87,7 +84,7 @@ func TestArchiveIsUnpacked(t *testing.T) {
 
 	}
 
-	out, err := toWebVTT(buffer.Bytes())
+	out, err := toWebVTT(buffer.Bytes(), 0, 0)
 
 	if err != nil {
 
@@ -103,19 +100,49 @@ func TestArchiveIsUnpacked(t *testing.T) {
 
 }
 
+func TestArchivePicksMatchingEpisode(t *testing.T) {
+
+	buffer := &bytes.Buffer{}
+	archive := zip.NewWriter(buffer)
+
+	wrong, _ := archive.Create("Show.S01E01.srt")
+	_, _ = wrong.Write([]byte("1\n00:00:01,000 --> 00:00:02,000\nWrong episode.\n"))
+
+	right, _ := archive.Create("Show.S01E03.srt")
+	_, _ = right.Write([]byte("1\n00:00:01,000 --> 00:00:02,000\nCorrect episode.\n"))
+
+	if err := archive.Close(); err != nil {
+
+		t.Fatalf("building the archive failed: %v", err)
+
+	}
+
+	out, err := toWebVTT(buffer.Bytes(), 1, 3)
+
+	if err != nil {
+
+		t.Fatalf("conversion failed: %v", err)
+
+	}
+
+	if !strings.Contains(string(out), "Correct episode.") {
+
+		t.Fatalf("wrong zip member selected: %q", string(out))
+
+	}
+
+}
+
 func TestArchiveWithoutASubtitleIsReported(t *testing.T) {
 
 	buffer := &bytes.Buffer{}
-
 	archive := zip.NewWriter(buffer)
 
 	notes, _ := archive.Create("readme.txt")
-
 	_, _ = notes.Write([]byte("nothing here"))
-
 	_ = archive.Close()
 
-	if _, err := toWebVTT(buffer.Bytes()); err == nil {
+	if _, err := toWebVTT(buffer.Bytes(), 0, 0); err == nil {
 
 		t.Fatal("an archive with no subtitle converted without complaint")
 
@@ -126,7 +153,7 @@ func TestArchiveWithoutASubtitleIsReported(t *testing.T) {
 // Releases are frequently Windows-1252, which would otherwise render as replacement characters.
 func TestNonUTF8TextSurvives(t *testing.T) {
 
-	out, err := toWebVTT([]byte("1\n00:00:01,000 --> 00:00:02,000\nCaf\xe9\n"))
+	out, err := toWebVTT([]byte("1\n00:00:01,000 --> 00:00:02,000\nCaf\xe9\n"), 0, 0)
 
 	if err != nil {
 

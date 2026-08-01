@@ -94,7 +94,7 @@ func TestSeekRewritesAnchor(t *testing.T) {
 
 }
 
-func TestQueueOpsKeepIndexOnTheCurrentItem(t *testing.T) {
+func TestQueueOpsKeepCursorOnUpcomingItem(t *testing.T) {
 
 	room, conn, _ := testRoom()
 
@@ -102,15 +102,16 @@ func TestQueueOpsKeepIndexOnTheCurrentItem(t *testing.T) {
 	second := resolve.Item{Kind: resolve.KindVOD, ID: "b", Title: "B"}
 	third := resolve.Item{Kind: resolve.KindVOD, ID: "c", Title: "C"}
 
+	// Currently playing something else; queue is pure up-next with cursor on C.
 	room.state.Queue = []resolve.Item{first, second, third}
 	room.state.QueueIndex = 2
-	room.state.Item = &third
+	room.state.Item = &resolve.Item{Kind: resolve.KindVOD, ID: "now", Title: "Now"}
 
 	room.queueOp(context.Background(), conn, ClientFrame{Op: OpRemove, Index: 0})
 
-	if len(room.state.Queue) != 2 || room.state.QueueIndex != 1 {
+	if len(room.state.Queue) != 2 || room.state.QueueIndex != 1 || room.state.Queue[1].ID != "c" {
 
-		t.Fatalf("queue was %d long at index %d, want 2 at 1", len(room.state.Queue), room.state.QueueIndex)
+		t.Fatalf("queue was %d long at index %d, want 2 at 1 (c)", len(room.state.Queue), room.state.QueueIndex)
 
 	}
 
@@ -119,6 +120,130 @@ func TestQueueOpsKeepIndexOnTheCurrentItem(t *testing.T) {
 	if room.state.Queue[0].ID != "c" {
 
 		t.Fatalf("queue head was %q, want c", room.state.Queue[0].ID)
+
+	}
+
+	if room.state.QueueIndex != 0 {
+
+		t.Fatalf("queue index after move was %d, want 0 (still on c)", room.state.QueueIndex)
+
+	}
+
+}
+
+func TestQueueRemoveClampsWhenCursorRowIsDeleted(t *testing.T) {
+
+	room, conn, _ := testRoom()
+
+	first := resolve.Item{Kind: resolve.KindVOD, ID: "a", Title: "A"}
+	second := resolve.Item{Kind: resolve.KindVOD, ID: "b", Title: "B"}
+
+	room.state.Queue = []resolve.Item{first, second}
+	room.state.QueueIndex = 1
+
+	room.queueOp(context.Background(), conn, ClientFrame{Op: OpRemove, Index: 1})
+
+	if len(room.state.Queue) != 1 {
+
+		t.Fatalf("queue length was %d, want 1", len(room.state.Queue))
+
+	}
+
+	if room.state.QueueIndex != 0 {
+
+		t.Fatalf("queue index was %d after removing the last row, want 0", room.state.QueueIndex)
+
+	}
+
+}
+
+func TestQueueCursorSurvivesChannelWhileReorder(t *testing.T) {
+
+	room, conn, _ := testRoom()
+
+	first := resolve.Item{Kind: resolve.KindVOD, ID: "a", Title: "A"}
+	second := resolve.Item{Kind: resolve.KindVOD, ID: "b", Title: "B"}
+	third := resolve.Item{Kind: resolve.KindVOD, ID: "c", Title: "C"}
+	channel := resolve.Item{Kind: resolve.KindChannel, ID: "espn", Title: "ESPN"}
+
+	room.state.Queue = []resolve.Item{first, second, third}
+	room.state.QueueIndex = 2
+	room.state.Item = &channel
+
+	room.queueOp(context.Background(), conn, ClientFrame{Op: OpRemove, Index: 0})
+
+	if room.state.QueueIndex != 1 || room.state.Queue[room.state.QueueIndex].ID != "c" {
+
+		t.Fatalf("resume cursor drifted to index %d id %q, want c at 1", room.state.QueueIndex, room.state.Queue[room.state.QueueIndex].ID)
+
+	}
+
+}
+
+func TestSetItemConsumesQueueEntry(t *testing.T) {
+
+	room, conn, _ := testRoom()
+
+	first := resolve.Item{Kind: resolve.KindVOD, ID: "a", Title: "A"}
+	second := resolve.Item{Kind: resolve.KindVOD, ID: "b", Title: "B"}
+
+	room.state.Queue = []resolve.Item{first, second}
+	room.state.QueueIndex = 0
+
+	if err := room.setItem(context.Background(), conn, &second, 0); err != nil {
+
+		t.Fatalf("setItem: %v", err)
+
+	}
+
+	if len(room.state.Queue) != 1 || room.state.Queue[0].ID != "a" {
+
+		t.Fatalf("queue after play was %+v, want only a remaining", room.state.Queue)
+
+	}
+
+	if room.state.Item == nil || room.state.Item.ID != "b" {
+
+		t.Fatalf("item was %+v, want b", room.state.Item)
+
+	}
+
+}
+
+func TestConcurrentNextFromSameItemAdvancesOnce(t *testing.T) {
+
+	room, conn, _ := testRoom()
+
+	first := resolve.Item{Kind: resolve.KindVOD, ID: "a", Title: "A"}
+	second := resolve.Item{Kind: resolve.KindVOD, ID: "b", Title: "B"}
+	third := resolve.Item{Kind: resolve.KindVOD, ID: "c", Title: "C"}
+
+	// A already started and was consumed; B and C remain up next.
+	room.state.Queue = []resolve.Item{second, third}
+	room.state.QueueIndex = 0
+	room.state.Item = &first
+
+	if err := room.step(context.Background(), conn, 1, &first); err != nil {
+
+		t.Fatalf("first next: %v", err)
+
+	}
+
+	if err := room.step(context.Background(), conn, 1, &first); err != nil {
+
+		t.Fatalf("second next: %v", err)
+
+	}
+
+	if room.state.Item == nil || room.state.Item.ID != "b" {
+
+		t.Fatalf("item was %+v, want b after concurrent next-from-a", room.state.Item)
+
+	}
+
+	if len(room.state.Queue) != 1 || room.state.Queue[0].ID != "c" {
+
+		t.Fatalf("queue was %+v, want only c remaining", room.state.Queue)
 
 	}
 
@@ -182,7 +307,6 @@ func TestQueueAddRejectsDuplicates(t *testing.T) {
 
 	room.state.Queue = []resolve.Item{item}
 	room.state.QueueIndex = 0
-	room.state.Item = &item
 
 	room.queueOp(context.Background(), conn, ClientFrame{Op: OpAdd, Item: &item})
 
@@ -194,31 +318,23 @@ func TestQueueAddRejectsDuplicates(t *testing.T) {
 
 }
 
-func TestSetItemAlignsExistingQueueIndex(t *testing.T) {
+func TestEmptyQueueAddAutoplaysAndConsumes(t *testing.T) {
 
 	room, conn, _ := testRoom()
 
-	first := resolve.Item{Kind: resolve.KindVOD, ID: "a", Title: "A"}
-	second := resolve.Item{Kind: resolve.KindVOD, ID: "b", Title: "B"}
+	item := resolve.Item{Kind: resolve.KindVOD, ID: "a", Title: "A"}
 
-	room.state.Queue = []resolve.Item{first, second}
-	room.state.QueueIndex = 0
+	room.queueOp(context.Background(), conn, ClientFrame{Op: OpAdd, Item: &item})
 
-	if err := room.setItem(context.Background(), conn, &second, 0); err != nil {
+	if room.state.Item == nil || room.state.Item.ID != "a" {
 
-		t.Fatalf("setItem: %v", err)
+		t.Fatalf("item was %+v, want a autoplayed", room.state.Item)
 
 	}
 
-	if room.state.QueueIndex != 1 {
+	if len(room.state.Queue) != 0 {
 
-		t.Fatalf("queue index was %d, want 1", room.state.QueueIndex)
-
-	}
-
-	if len(room.state.Queue) != 2 {
-
-		t.Fatalf("queue length was %d, want 2", len(room.state.Queue))
+		t.Fatalf("playing item stayed in queue: %+v", room.state.Queue)
 
 	}
 
@@ -235,7 +351,7 @@ func TestNextIsInertWhileAChannelPlays(t *testing.T) {
 	room.state.Queue = []resolve.Item{queued}
 	room.state.QueueIndex = 0
 
-	room.step(context.Background(), conn, 1)
+	room.step(context.Background(), conn, 1, nil)
 
 	if room.state.Item.ID != "espn-us" {
 

@@ -161,7 +161,7 @@ Tuning to a channel replaces whatever is playing and leaves the queue untouched;
 
 This keeps two genuinely different ideas apart. Tuning in is not queueing, and forcing channels into the queue would either stall it on an entry that never advances or require inventing an arbitrary duration for a live broadcast — which would cut off the end of a match, precisely the wrong failure for the sports use case this is being built for.
 
-Within VOD, finishing an item advances automatically to the next. **Series roll across season boundaries** — the last episode of a season continues into the first of the next, since stopping there would interrupt exactly the binge the queue exists to support.
+Within VOD, finishing an item advances automatically to the next. **The queue is pure "up next"** — starting a title (play-from-queue, autoplay, or skip) removes it from the list so the room is not left with a growing playlist of things already watched. Rewatch is re-queue or play again from browse. **Series roll across season boundaries** when those episodes are queued — the last episode of a season continues into the first of the next, since stopping there would interrupt exactly the binge the queue exists to support.
 
 ### 4.7 Personal versus shared settings
 

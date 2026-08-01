@@ -16,13 +16,16 @@ import (
 	"github.com/gin-gonic/gin"
 )
 
-const maxTracks = 25
+// Tight cap after Streamly-Web-style filtering — enough alternatives for a bad release match without flooding the menu.
+const maxTracks = 8
 
 type trackView struct {
-	ID    string `json:"id"`
+
+	ID string `json:"id"`
 	Label string `json:"label"`
 
 	URL string `json:"url"`
+
 }
 
 // Candidates are ranked but nothing is loaded until someone asks — subtitles are shared, so they default to off (see _docs/DESIGN.md §5.5).
@@ -42,10 +45,11 @@ func (a *api) subtitles(c *gin.Context) {
 
 		Series: c.Query("series") == "1",
 
-		Season:  intQuery(c, "season"),
+		Season: intQuery(c, "season"),
 		Episode: intQuery(c, "episode"),
 
 		ReleaseName: c.Query("release"),
+
 	}
 
 	releases, err := a.subdl.Search(c.Request.Context(), query)
@@ -59,45 +63,41 @@ func (a *api) subtitles(c *gin.Context) {
 
 	}
 
-	tracks := make([]trackView, 0, len(releases))
-	counts := map[string]int{}
+	tracks := make([]trackView, 0, min(len(releases), maxTracks))
+	langCount := map[string]int{}
 
 	for _, release := range releases {
 
-		if len(tracks) == maxTracks {
+		if len(tracks) >= maxTracks {
 
 			break
 
 		}
 
-		language := languageName(release.Language)
+		label := trackLabel(release, langCount)
 
-		if language == "" {
+		params := url.Values{}
+		params.Set("path", release.Path)
 
-			language = languageName(release.ReleaseName)
+		if query.Season > 0 {
 
-		}
-
-		if language == "" {
-
-			language = languageName(release.Name)
+			params.Set("season", strconv.Itoa(query.Season))
 
 		}
 
-		if language == "" {
+		if query.Episode > 0 {
 
-			language = "Track"
+			params.Set("episode", strconv.Itoa(query.Episode))
 
 		}
-
-		counts[language]++
 
 		tracks = append(tracks, trackView{
 
-			ID:    release.Path,
-			Label: fmt.Sprintf("%s %d", language, counts[language]),
+			ID: release.Path,
+			Label: label,
 
-			URL: proxy.PathPrefix + "/api/subtitle?path=" + url.QueryEscape(release.Path),
+			URL: proxy.PathPrefix + "/api/subtitle?" + params.Encode(),
+
 		})
 
 	}
@@ -117,7 +117,7 @@ func (a *api) subtitle(c *gin.Context) {
 
 	}
 
-	vtt, err := a.subdl.Track(c.Request.Context(), path)
+	vtt, err := a.subdl.Track(c.Request.Context(), path, intQuery(c, "season"), intQuery(c, "episode"))
 
 	if err != nil {
 
@@ -183,10 +183,11 @@ func introQuery(c *gin.Context) introdb.Query {
 		TmdbID: intQuery(c, "tmdbId"),
 		ImdbID: c.Query("imdbId"),
 
-		Season:  intQuery(c, "season"),
+		Season: intQuery(c, "season"),
 		Episode: intQuery(c, "episode"),
 
 		DurationMs: durationMs,
+
 	}
 
 }
@@ -202,6 +203,51 @@ func intQuery(c *gin.Context, name string) int {
 	}
 
 	return value
+
+}
+
+func trackLabel(release subdl.Release, langCount map[string]int) string {
+
+	lang := "English"
+
+	if code := strings.ToLower(strings.TrimSpace(release.Language)); code != "" && code != "en" && code != "eng" && code != "english" {
+
+		lang = languageName(release.Language)
+
+		if lang == "" {
+
+			lang = "Track"
+
+		}
+
+	}
+
+	key := lang
+
+	if release.HearingImpaired {
+
+		key += "+sdh"
+
+	}
+
+	langCount[key]++
+	count := langCount[key]
+
+	label := lang
+
+	if release.HearingImpaired {
+
+		label += " (SDH)"
+
+	}
+
+	if count > 1 {
+
+		label += fmt.Sprintf(" · Option %d", count)
+
+	}
+
+	return label
 
 }
 
@@ -281,16 +327,16 @@ func languageName(value string) string {
 
 	for code, name := range map[string]string{
 
-		"ENGLISH":    "English",
-		"SPANISH":    "Spanish",
-		"FRENCH":     "French",
-		"GERMAN":     "German",
+		"ENGLISH": "English",
+		"SPANISH": "Spanish",
+		"FRENCH": "French",
+		"GERMAN": "German",
 		"PORTUGUESE": "Portuguese",
-		"ITALIAN":    "Italian",
-		"JAPANESE":   "Japanese",
-		"KOREAN":     "Korean",
-		"CHINESE":    "Chinese",
-		"RUSSIAN":    "Russian",
+		"ITALIAN": "Italian",
+		"JAPANESE": "Japanese",
+		"KOREAN": "Korean",
+		"CHINESE": "Chinese",
+		"RUSSIAN": "Russian",
 	} {
 
 		if strings.Contains(upper, code) {

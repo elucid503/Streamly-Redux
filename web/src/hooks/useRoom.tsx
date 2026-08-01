@@ -44,7 +44,7 @@ interface RoomValue {
   pause: () => void;
   seek: (positionMs: number) => void;
 
-  next: () => void;
+  next: (from?: Item | null) => void;
   prev: () => void;
 
   setItem: (item: Item | null) => void;
@@ -156,7 +156,8 @@ export function RoomProvider({ session, children }: { session: Session; children
       pause: () => syncRef.current?.send({ type: "control", action: "pause" }),
       seek: (positionMs: number) => syncRef.current?.send({ type: "control", action: "seek", positionMs: Math.round(positionMs) }),
 
-      next: () => syncRef.current?.send({ type: "control", action: "next" }),
+      // Pass the finishing item on autoplay so multi-client "ended" only advances once server-side.
+      next: (from) => syncRef.current?.send({ type: "control", action: "next", item: from ?? undefined }),
       prev: () => syncRef.current?.send({ type: "control", action: "prev" }),
 
       setItem: (item: Item | null) => {

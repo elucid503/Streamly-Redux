@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from "react";
-import { ListVideo, Pause, Play, SkipBack, SkipForward, Volume2, VolumeX } from "lucide-react";
+import { ListVideo, Pause, Play, SkipForward, Volume2, VolumeX } from "lucide-react";
 
 import { QueueSheet } from "@/components/browse/QueueSheet";
 import { QualityMenu } from "@/components/player/QualityMenu";
@@ -29,7 +29,7 @@ const volumeHideDelayMs = 280;
 
 export function Controls({ handle, volume, muted, onVolume, onMuted }: ControlsProps) {
 
-  const { state, play, pause, seek, next, prev } = useRoom();
+  const { state, play, pause, seek, next } = useRoom();
 
   const [scrub, setScrub] = useState<number | null>(null);
   const [volumeOpen, setVolumeOpen] = useState(false);
@@ -85,7 +85,8 @@ export function Controls({ handle, volume, muted, onVolume, onMuted }: ControlsP
   const queueLength = state.queue.length;
 
   const live = handle.live || state.item?.kind === "channel";
-  const showQueueControls = state.item?.kind === "vod" && queueLength > 1;
+  // Queue is up-next only (playing title is already consumed) — skip-forward when something remains.
+  const showNext = state.item?.kind === "vod" && queueLength > 0;
 
   const position = scrub ?? handle.position;
 
@@ -140,25 +141,15 @@ export function Controls({ handle, volume, muted, onVolume, onMuted }: ControlsP
 
         )}
 
-        {showQueueControls && (
-
-          <Button variant="ghost" size="icon" className="text-white hover:bg-white/15 hover:text-white" onClick={prev}>
-
-            <SkipBack />
-
-          </Button>
-
-        )}
-
         <Button variant="ghost" size="icon" className="text-white hover:bg-white/15 hover:text-white" onClick={state.playing ? pause : play}>
 
           {state.playing ? <Pause /> : <Play />}
 
         </Button>
 
-        {showQueueControls && (
+        {showNext && (
 
-          <Button variant="ghost" size="icon" className="text-white hover:bg-white/15 hover:text-white" onClick={next}>
+          <Button variant="ghost" size="icon" className="text-white hover:bg-white/15 hover:text-white" onClick={() => next()}>
 
             <SkipForward />
 
