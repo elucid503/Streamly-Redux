@@ -1,5 +1,6 @@
 import { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState } from "react";
 
+import { syncDiscordPresence } from "@/lib/presence";
 import { Sync, type ConnectionStatus } from "@/lib/sync";
 import type { Item, Notice, Participant, RoomState, SubtitleTrack } from "@/lib/types";
 import type { Session } from "@/lib/sdk";
@@ -132,6 +133,18 @@ export function RoomProvider({ session, children }: { session: Session; children
     };
 
   }, [session.config.clientId, session.instanceId, session.guildId, session.socketTicket]);
+
+  useEffect(() => {
+
+    if (!joined) {
+
+      return;
+
+    }
+
+    syncDiscordPresence(state.item, state.playing);
+
+  }, [joined, state.item, state.playing]);
 
   const serverNow = useCallback(() => syncRef.current?.serverNow() ?? Date.now(), []);
 

@@ -10,6 +10,7 @@ import (
 type Config struct {
 	DiscordClientID     string
 	DiscordClientSecret string
+	BotToken            string
 
 	FebboxUICookie string
 	TMDBAPIKey     string
@@ -34,6 +35,7 @@ func Load() (*Config, error) {
 
 		DiscordClientID:     os.Getenv("DISCORD_CLIENT_ID"),
 		DiscordClientSecret: os.Getenv("DISCORD_CLIENT_SECRET"),
+		BotToken:            os.Getenv("BOT_TOKEN"),
 
 		FebboxUICookie: os.Getenv("FEBBOX_UI_COOKIE"),
 		TMDBAPIKey:     os.Getenv("TMDB_API_KEY"),

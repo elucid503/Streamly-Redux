@@ -8,6 +8,7 @@ import (
 	"strings"
 
 	"streamly/internal/auth"
+	"streamly/internal/bot"
 	"streamly/internal/catalog"
 	"streamly/internal/config"
 	"streamly/internal/history"
@@ -29,18 +30,23 @@ import (
 
 func Run(cfg *config.Config) error {
 
+	// Process-lifetime context: bot reconnects until the process exits.
+	rootCtx := context.Background()
+
+	bot.Start(rootCtx, cfg.BotToken, cfg.DiscordClientID)
+
 	live := daddylive.New()
 
 	channels := catalog.New(live)
 
 	// An unreachable upstream must not stop the binary booting; the catalog simply starts empty and fills on the next pass.
-	if err := channels.Refresh(context.Background()); err != nil {
+	if err := channels.Refresh(rootCtx); err != nil {
 
 		slog.Error("initial catalog build failed", "err", err)
 
 	}
 
-	go channels.Watch(context.Background())
+	go channels.Watch(rootCtx)
 
 	authenticator := auth.New(cfg.DiscordClientID, cfg.DiscordClientSecret)
 
@@ -53,7 +59,7 @@ func Run(cfg *config.Config) error {
 
 	if cfg.MongoURI != "" {
 
-		store, err := history.Open(context.Background(), cfg.MongoURI)
+		store, err := history.Open(rootCtx, cfg.MongoURI)
 
 		if err != nil {
 

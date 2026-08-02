@@ -16,6 +16,7 @@ rest gates one feature each:
 | | |
 |---|---|
 | `DISCORD_CLIENT_ID` / `DISCORD_CLIENT_SECRET` | Required — OAuth code exchange |
+| `BOT_TOKEN` | Optional — bot stays online while the server runs; registers global `/launch` |
 | `FEBBOX_UI_COOKIE` | VOD. Without it, movies and series report an authentication failure |
 | `TMDB_API_KEY` | Home-page curation and high-quality poster/backdrop metadata |
 | `SUBDL_API_KEY` | Subtitles. Without it, the subtitle menu stays empty |
@@ -76,6 +77,7 @@ The activity generally cannot use localhost. Discord loads it through a URL mapp
 cmd/streamly/     entrypoint
 internal/
   auth/           OAuth exchange, token verification
+  bot/            Discord gateway presence + global /launch
   catalog/        iptv-org reference, provider matching, refresh
   config/         .env loading
   proxy/          media relay, HLS rewriting, images, failure detection

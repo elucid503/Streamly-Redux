@@ -143,7 +143,8 @@ async function run(onStep: (step: string) => void): Promise<Session> {
       response_type: "code",
       state: "",
       prompt: "none",
-      scope: ["identify"],
+      // rpc.activities.write lets setActivity update profile presence (may be partner-gated).
+      scope: ["identify", "rpc.activities.write"],
 
     }),
 
@@ -181,5 +182,11 @@ async function run(onStep: (step: string) => void): Promise<Session> {
     config,
 
   };
+
+}
+
+export function getSDK(): DiscordSDK | null {
+
+  return instance;
 
 }
