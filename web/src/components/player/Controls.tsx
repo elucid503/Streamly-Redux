@@ -3,6 +3,7 @@ import { ListVideo, Pause, Play, SkipForward, Volume2, VolumeX } from "lucide-re
 
 import { QueueSheet } from "@/components/browse/QueueSheet";
 import { QualityMenu } from "@/components/player/QualityMenu";
+import { SourceMenu } from "@/components/player/SourceMenu";
 import { SubtitleMenu } from "@/components/player/SubtitleMenu";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -243,6 +244,8 @@ export function Controls({ handle, volume, muted, onVolume, onMuted }: ControlsP
             showTrigger={false}
             anchorRef={queueTriggerRef}
           />
+
+          {live && <SourceMenu handle={handle} />}
 
           {!live && (
 

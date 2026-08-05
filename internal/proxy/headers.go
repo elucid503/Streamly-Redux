@@ -25,6 +25,17 @@ func applyHeaders(req *http.Request, source string, referer *url.URL) {
 
 		req.Header.Set("Accept-Language", "en-US,en;q=0.9")
 
+	case "ntv":
+
+		req.Header.Set("Accept-Language", "en-US,en;q=0.9")
+
+		if referer == nil {
+
+			req.Header.Set("Referer", "https://cdnlivetv.tv/")
+			req.Header.Set("Origin", "https://cdnlivetv.tv")
+
+		}
+
 	}
 
 }

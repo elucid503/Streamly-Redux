@@ -13,6 +13,8 @@ const (
 	ActionPrev = "prev"
 	ActionSetItem = "setItem"
 	ActionSetSubtitle = "setSubtitle"
+	ActionSetSource = "setSource"
+	ActionNextSource = "nextSource"
 
 )
 

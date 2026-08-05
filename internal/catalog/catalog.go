@@ -9,27 +9,33 @@ import (
 	"time"
 
 	"streamly/internal/sources/daddylive"
+	"streamly/internal/sources/ntv"
 )
 
 // Provider listings rot and the reference set gains channels; neither changes fast enough to want more than this.
 const refreshInterval = 6 * time.Hour
 
 type Catalog struct {
+
 	live *daddylive.Client
+	ntv *ntv.Client
 
 	http *http.Client
 
-	mu       sync.RWMutex
+	mu sync.RWMutex
 	channels []Channel
+
 }
 
-func New(live *daddylive.Client) *Catalog {
+func New(live *daddylive.Client, backup *ntv.Client) *Catalog {
 
 	return &Catalog{
 
 		live: live,
+		ntv: backup,
 
 		http: referenceClient(),
+
 	}
 
 }
@@ -115,7 +121,26 @@ func (c *Catalog) Refresh(ctx context.Context) error {
 
 	}
 
-	built, _, assumed := build(references, listing)
+	built, unmatched, assumed := build(references, listing)
+
+	ntvMatched := 0
+
+	if c.ntv != nil {
+
+		backup, err := c.ntv.Channels(ctx)
+
+		if err != nil {
+
+			// DaddyLive-only catalog is still useful; NTV is a backup tier.
+			slog.Error("ntv catalog list failed", "err", err)
+
+		} else {
+
+			built, ntvMatched = attachNTV(built, references, backup)
+
+		}
+
+	}
 
 	c.mu.Lock()
 
@@ -123,7 +148,7 @@ func (c *Catalog) Refresh(ctx context.Context) error {
 
 	c.mu.Unlock()
 
-	slog.Info("catalog built", "channels", len(built), "reference", len(references), "listed", len(listing), "assumedCountry", assumed)
+	slog.Info("catalog built", "channels", len(built), "reference", len(references), "listed", len(listing), "unmatched", len(unmatched), "assumedCountry", assumed, "ntvSources", ntvMatched)
 
 	return nil
 
@@ -133,7 +158,7 @@ func build(references []reference, listing []daddylive.Channel) ([]Channel, []st
 
 	lookup := newIndex(references)
 
-	byID := map[string]*Channel{}
+	byID := map[string]Channel{}
 
 	unmatched := []string{}
 
@@ -164,13 +189,14 @@ func build(references []reference, listing []daddylive.Channel) ([]Channel, []st
 
 			// A second listing for the same channel is a genuine redundancy, so it becomes a fallback.
 			existing.Sources = append(existing.Sources, source)
+			byID[found.ID] = existing
 			continue
 
 		}
 
-		byID[found.ID] = &Channel{
+		byID[found.ID] = Channel{
 
-			ID:   found.ID,
+			ID: found.ID,
 			Name: found.Name,
 
 			Country: found.Country,
@@ -181,15 +207,107 @@ func build(references []reference, listing []daddylive.Channel) ([]Channel, []st
 			Logo: found.Logo,
 
 			Sources: []Source{source},
+
 		}
 
 	}
+
+	return finalize(byID), unmatched, assumed
+
+}
+
+// attachNTV matches NTV listings onto the same iptv-org identities and appends them as backups.
+func attachNTV(channels []Channel, references []reference, listing []ntv.Channel) ([]Channel, int) {
+
+	lookup := newIndex(references)
+
+	byID := map[string]Channel{}
+
+	for _, channel := range channels {
+
+		byID[channel.ID] = channel
+
+	}
+
+	matched := 0
+
+	for _, entry := range listing {
+
+		title := entry.Name
+
+		if entry.Code != "" {
+
+			title = entry.Name + " " + entry.Code
+
+		}
+
+		result, ok := lookup.match(title)
+
+		if !ok {
+
+			// Retry without country suffix when the country token made the match ambiguous.
+			result, ok = lookup.match(entry.Name)
+
+		}
+
+		if !ok {
+
+			continue
+
+		}
+
+		found := result.reference
+
+		source := Source{Provider: ProviderNTV, Ref: entry.ID}
+
+		if existing, seen := byID[found.ID]; seen {
+
+			if hasProvider(existing.Sources, ProviderNTV) {
+
+				continue
+
+			}
+
+			existing.Sources = append(existing.Sources, source)
+			byID[found.ID] = existing
+			matched++
+			continue
+
+		}
+
+		// NTV-only channels that match the reference set still belong in the map.
+		byID[found.ID] = Channel{
+
+			ID: found.ID,
+			Name: found.Name,
+
+			Country: found.Country,
+			Network: found.Network,
+
+			Categories: found.Categories,
+
+			Logo: found.Logo,
+
+			Sources: []Source{source},
+
+		}
+
+		matched++
+
+	}
+
+	return finalize(byID), matched
+
+}
+
+func finalize(byID map[string]Channel) []Channel {
 
 	channels := make([]Channel, 0, len(byID))
 
 	for _, channel := range byID {
 
-		channels = append(channels, *channel)
+		sortSources(channel.Sources)
+		channels = append(channels, channel)
 
 	}
 
@@ -205,6 +323,6 @@ func build(references []reference, listing []daddylive.Channel) ([]Channel, []st
 
 	})
 
-	return channels, unmatched, assumed
+	return channels
 
 }

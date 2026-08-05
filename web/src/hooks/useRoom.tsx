@@ -51,6 +51,9 @@ interface RoomValue {
   setItem: (item: Item | null) => void;
   setSubtitle: (track: SubtitleTrack | null) => void;
 
+  setSource: (index: number) => void;
+  nextSource: () => void;
+
   enqueue: (item: Item) => void;
   dequeue: (index: number) => void;
   reorder: (index: number, to: number) => void;
@@ -187,6 +190,17 @@ export function RoomProvider({ session, children }: { session: Session; children
         // Apply locally first so the selecting client does not wait on the room round-trip.
         setState((current) => ({ ...current, subtitle: track }));
         syncRef.current?.send({ type: "control", action: "setSubtitle", track });
+
+      },
+
+      setSource: (index: number) => {
+
+        syncRef.current?.send({ type: "control", action: "setSource", index });
+
+      },
+      nextSource: () => {
+
+        syncRef.current?.send({ type: "control", action: "nextSource" });
 
       },
 

@@ -25,6 +25,9 @@ const maxHardRetries = 2;
 // How long currentTime may freeze while the room is playing before we force recovery.
 const stallTimeoutMs = 12_000;
 
+// Live TV that sits buffering this long advances to the next catalog source.
+const liveBufferFailoverMs = 10_000;
+
 // Ignore tiny currentTime jitter when deciding whether playback made progress.
 const progressEpsilonSeconds = 0.05;
 
@@ -38,17 +41,21 @@ export interface PlayerHandle {
 
   live: boolean;
 
+  sourceIndex: number;
+  sourceCount: number;
+
   qualities: Quality[];
   quality: Quality | null;
 
   selectQuality: (label: string) => void;
+  selectSource: (index: number) => void;
   retry: () => void;
 
 }
 
 export function usePlayer(video: HTMLVideoElement | null): PlayerHandle {
 
-  const { state, serverNow, next } = useRoom();
+  const { state, serverNow, next, setSource, nextSource } = useRoom();
 
   const [position, setPosition] = useState(0);
   const [duration, setDuration] = useState(0);
@@ -74,19 +81,28 @@ export function usePlayer(video: HTMLVideoElement | null): PlayerHandle {
   const lastMediaTimeRef = useRef(0);
   const lastProgressAtRef = useRef(0);
 
+  // Live buffer watchdog: fire nextSource once per source index after sustained buffering.
+  const bufferStartedAtRef = useRef<number | null>(null);
+  const failoverForSourceRef = useRef<number | null>(null);
+
   // Stable snapshots so the correction timer is not torn down on every room poll.
   const stateRef = useRef(state);
   const serverNowRef = useRef(serverNow);
   const liveRef = useRef(false);
+  const nextSourceRef = useRef(nextSource);
 
   stateRef.current = state;
   serverNowRef.current = serverNow;
   videoRef.current = video;
+  nextSourceRef.current = nextSource;
 
   const playback = state.playback;
   const live = state.item?.kind === "channel";
 
   liveRef.current = Boolean(live);
+
+  const sourceIndex = playback?.sourceIndex ?? 0;
+  const sourceCount = playback?.sourceCount ?? 0;
 
   const qualities = useMemo(() => playback?.qualities ?? [], [playback]);
 
@@ -132,6 +148,8 @@ export function usePlayer(video: HTMLVideoElement | null): PlayerHandle {
     hadFirstFrameRef.current = false;
     lastMediaTimeRef.current = 0;
     lastProgressAtRef.current = Date.now();
+    bufferStartedAtRef.current = null;
+    failoverForSourceRef.current = null;
 
     if (seekUnlockTimer.current !== null) {
 
@@ -141,6 +159,44 @@ export function usePlayer(video: HTMLVideoElement | null): PlayerHandle {
     }
 
   }, [state.item?.id, state.item?.season, state.item?.episode, resetSoftRecovery]);
+
+  // A room source change is a fresh stream — clear local recovery state.
+  useEffect(() => {
+
+    bufferStartedAtRef.current = null;
+    failoverForSourceRef.current = null;
+    resetSoftRecovery();
+    hardRetries.current = 0;
+    setError(null);
+    setBuffering(true);
+
+  }, [sourceIndex, resetSoftRecovery]);
+
+  // Arm the live buffer timer whenever we enter a buffering state.
+  useEffect(() => {
+
+    if (!live) {
+
+      bufferStartedAtRef.current = null;
+      return;
+
+    }
+
+    if (buffering) {
+
+      if (bufferStartedAtRef.current === null) {
+
+        bufferStartedAtRef.current = Date.now();
+
+      }
+
+      return;
+
+    }
+
+    bufferStartedAtRef.current = null;
+
+  }, [buffering, live]);
 
   // Loading reads the room position once; every later change is handled by correction rather than by reloading.
   const positionAtLoad = useRef(0);
@@ -356,6 +412,20 @@ export function usePlayer(video: HTMLVideoElement | null): PlayerHandle {
       hardRetries.current += 1;
       recoveringRef.current = false;
       remountPlayer();
+      return;
+
+    }
+
+    // Exhausted local recovery on live TV: advance room source before showing a hard error.
+    const room = stateRef.current;
+    const current = room.playback?.sourceIndex ?? 0;
+    const total = room.playback?.sourceCount ?? 0;
+
+    if (liveRef.current && total > current + 1 && failoverForSourceRef.current !== current) {
+
+      failoverForSourceRef.current = current;
+      recoveringRef.current = false;
+      nextSourceRef.current();
       return;
 
     }
@@ -646,11 +716,18 @@ export function usePlayer(video: HTMLVideoElement | null): PlayerHandle {
       wasStallingRef.current = true;
       setBuffering(true);
 
+      if (bufferStartedAtRef.current === null) {
+
+        bufferStartedAtRef.current = Date.now();
+
+      }
+
     };
 
     const onPlaying = () => {
 
       setBuffering(false);
+      bufferStartedAtRef.current = null;
       hadFirstFrameRef.current = true;
       lastProgressAtRef.current = Date.now();
       lastMediaTimeRef.current = video.currentTime;
@@ -671,6 +748,39 @@ export function usePlayer(video: HTMLVideoElement | null): PlayerHandle {
 
     };
 
+    // Sustained live buffering advances to the next catalog source for the room.
+    const bufferTimer = window.setInterval(() => {
+
+      if (!liveRef.current || !stateRef.current.playing || error) {
+
+        return;
+
+      }
+
+      const started = bufferStartedAtRef.current;
+
+      if (started === null || Date.now() - started < liveBufferFailoverMs) {
+
+        return;
+
+      }
+
+      const room = stateRef.current;
+      const current = room.playback?.sourceIndex ?? 0;
+      const total = room.playback?.sourceCount ?? 0;
+
+      if (total <= current + 1 || failoverForSourceRef.current === current) {
+
+        return;
+
+      }
+
+      failoverForSourceRef.current = current;
+      bufferStartedAtRef.current = null;
+      nextSourceRef.current();
+
+    }, 1000);
+
     const onTime = () => {
 
       if (!seekingRef.current) {
@@ -688,6 +798,7 @@ export function usePlayer(video: HTMLVideoElement | null): PlayerHandle {
         if (hadFirstFrameRef.current && !video.paused) {
 
           setBuffering(false);
+          bufferStartedAtRef.current = null;
 
         }
 
@@ -732,6 +843,7 @@ export function usePlayer(video: HTMLVideoElement | null): PlayerHandle {
 
       window.clearInterval(timer);
       window.clearInterval(stallTimer);
+      window.clearInterval(bufferTimer);
 
       document.removeEventListener("visibilitychange", onVisible);
 
@@ -755,6 +867,18 @@ export function usePlayer(video: HTMLVideoElement | null): PlayerHandle {
 
   }, [resetSoftRecovery]);
 
+  const selectSource = useCallback((index: number) => {
+
+    resetSoftRecovery();
+    hardRetries.current = 0;
+    failoverForSourceRef.current = null;
+    bufferStartedAtRef.current = null;
+    setError(null);
+    setBuffering(true);
+    setSource(index);
+
+  }, [resetSoftRecovery, setSource]);
+
   const retry = useCallback(() => {
 
     resetSoftRecovery();
@@ -776,10 +900,14 @@ export function usePlayer(video: HTMLVideoElement | null): PlayerHandle {
 
     live: Boolean(live),
 
+    sourceIndex,
+    sourceCount,
+
     qualities,
     quality,
 
     selectQuality,
+    selectSource,
     retry,
 
   };

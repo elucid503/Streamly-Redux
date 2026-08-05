@@ -84,8 +84,7 @@ export function Player({ onBrowse }: PlayerProps) {
 
     let cancelled = false;
 
-    void getHistoryResume(session.guildId, session.socketTicket, state.item)
-      .then((result) => {
+    void getHistoryResume(session.guildId, session.socketTicket, state.item).then((result) => {
 
         if (cancelled || !result.resume || result.positionMs <= 0) {
 

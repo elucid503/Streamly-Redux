@@ -2,17 +2,20 @@ package ntv
 
 import (
 	"context"
+	"encoding/base64"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
 	"net/http"
-	"net/url"
 	"regexp"
 	"strings"
 	"sync"
 	"time"
 )
+
+// Mirrors Streamly-Web media/internal/live/source/ntv.go: catalog from ntv.cx,
+// stream URL assembled from the cdnlive player page, playlist verified before return.
 
 const baseURL = "https://ntv.cx"
 
@@ -20,17 +23,25 @@ const browserUA = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 
 
 const maxBodyBytes = 8 << 20
 
-const channelTTL = 10 * time.Minute
+const channelTTL = 30 * time.Minute
+
+const cdnReferer = "https://cdnlivetv.tv/"
 
 var (
 
-	ErrChannelUnknown = errors.New("ntv: channel code not listed")
-	ErrNoDirectManifest = errors.New("ntv: channel hides its manifest behind an obfuscated embed")
+	ErrChannelUnknown = errors.New("ntv: channel not listed")
+	ErrNoStream = errors.New("ntv: player page has no stream url")
+	ErrPlaylistUnplayable = errors.New("ntv: playlist is not playable")
 
 )
 
-// Only channels whose player page exposes a manifest in plain sight are in scope (see _docs/DESIGN.md §5.1).
-var manifestPattern = regexp.MustCompile(`(?i)["'](https?://[^"'\s]+\.m3u8[^"'\s]*)["']`)
+var (
+
+	varDeclPattern = regexp.MustCompile(`var\s+(\w+)\s*=\s*'([^']*)';`)
+	chainPattern = regexp.MustCompile(`var\s+\w+\s*=\s*((?:\w+\(\w+\)\s*\+\s*)*\w+\(\w+\))\s*;`)
+	callPattern = regexp.MustCompile(`\w+\((\w+)\)`)
+
+)
 
 type Channel struct {
 
@@ -39,6 +50,7 @@ type Channel struct {
 	Code string
 
 	URL string
+	Server string
 
 }
 
@@ -91,7 +103,10 @@ func (c *Client) Channels(ctx context.Context) ([]Channel, error) {
 
 	c.mu.Unlock()
 
-	body, err := c.fetch(ctx, baseURL+"/api/get-channels", baseURL+"/")
+	body, err := c.fetch(ctx, baseURL+"/api/get-channels", map[string]string{
+		"Accept": "application/json",
+		"Accept-Language": "en-US,en;q=0.9",
+	})
 
 	if err != nil {
 
@@ -109,6 +124,7 @@ func (c *Client) Channels(ctx context.Context) ([]Channel, error) {
 			Name string `json:"channel_name"`
 			Code string `json:"channel_code"`
 			URL string `json:"channel_url"`
+			Server string `json:"server"`
 
 		} `json:"channels"`
 
@@ -120,34 +136,76 @@ func (c *Client) Channels(ctx context.Context) ([]Channel, error) {
 
 	}
 
-	channels := make([]Channel, 0, len(result.Channels))
+	if !result.Success {
+
+		return nil, fmt.Errorf("ntv: channels response reported failure")
+
+	}
+
+	// Prefer cdnlive — historically the only ntv server that resolved cleanly.
+	filtered := make([]Channel, 0, len(result.Channels))
 
 	for _, entry := range result.Channels {
 
-		channels = append(channels, Channel{
+		if entry.Server != "" && entry.Server != "cdnlive" {
+
+			continue
+
+		}
+
+		filtered = append(filtered, Channel{
 
 			ID: entry.ID,
 			Name: entry.Name,
 			Code: entry.Code,
 
 			URL: entry.URL,
+			Server: entry.Server,
 
 		})
 
 	}
 
+	if len(filtered) == 0 {
+
+		for _, entry := range result.Channels {
+
+			filtered = append(filtered, Channel{
+
+				ID: entry.ID,
+				Name: entry.Name,
+				Code: entry.Code,
+
+				URL: entry.URL,
+				Server: entry.Server,
+
+			})
+
+		}
+
+	}
+
 	c.mu.Lock()
 
-	c.channels = channels
+	c.channels = filtered
 	c.fetchedAt = time.Now()
 
 	c.mu.Unlock()
 
-	return channels, nil
+	return filtered, nil
 
 }
 
-func (c *Client) Resolve(ctx context.Context, code string) (*Stream, error) {
+// Resolve looks up a channel by id (preferred catalog ref) or name.
+func (c *Client) Resolve(ctx context.Context, ref string) (*Stream, error) {
+
+	ref = strings.TrimSpace(ref)
+
+	if ref == "" {
+
+		return nil, ErrChannelUnknown
+
+	}
 
 	channels, err := c.Channels(ctx)
 
@@ -161,7 +219,7 @@ func (c *Client) Resolve(ctx context.Context, code string) (*Stream, error) {
 
 	for _, channel := range channels {
 
-		if strings.EqualFold(channel.Code, code) || strings.EqualFold(channel.ID, code) {
+		if strings.EqualFold(channel.ID, ref) || strings.EqualFold(channel.Name, ref) {
 
 			player = channel.URL
 			break
@@ -176,7 +234,9 @@ func (c *Client) Resolve(ctx context.Context, code string) (*Stream, error) {
 
 	}
 
-	page, err := c.fetch(ctx, player, baseURL+"/")
+	page, err := c.fetch(ctx, player, map[string]string{
+		"Accept-Language": "en-US,en;q=0.9",
+	})
 
 	if err != nil {
 
@@ -184,24 +244,163 @@ func (c *Client) Resolve(ctx context.Context, code string) (*Stream, error) {
 
 	}
 
-	match := manifestPattern.FindStringSubmatch(page)
+	streamURL, err := extractStreamURL(page)
 
-	if match == nil {
+	if err != nil {
 
-		return nil, ErrNoDirectManifest
+		return nil, err
+
+	}
+
+	headers := map[string]string{
+
+		"Referer": cdnReferer,
+		"Origin": "https://cdnlivetv.tv",
+		"User-Agent": browserUA,
+
+	}
+
+	if !c.playlistPlayable(ctx, streamURL, headers) {
+
+		// Some edges accept bare requests without referer.
+		if !c.playlistPlayable(ctx, streamURL, map[string]string{"User-Agent": browserUA}) {
+
+			return nil, ErrPlaylistUnplayable
+
+		}
+
+		return &Stream{
+
+			URL: streamURL,
+			Referer: "",
+
+		}, nil
 
 	}
 
 	return &Stream{
 
-		URL: strings.ReplaceAll(match[1], `\/`, "/"),
-		Referer: originOf(player) + "/",
+		URL: streamURL,
+		Referer: cdnReferer,
 
 	}, nil
 
 }
 
-func (c *Client) fetch(ctx context.Context, target string, referer string) (string, error) {
+func extractStreamURL(html string) (string, error) {
+
+	literals := make(map[string]string)
+
+	for _, match := range varDeclPattern.FindAllStringSubmatch(html, -1) {
+
+		literals[match[1]] = match[2]
+
+	}
+
+	if len(literals) == 0 {
+
+		return "", ErrNoStream
+
+	}
+
+	var best []string
+
+	for _, chain := range chainPattern.FindAllStringSubmatch(html, -1) {
+
+		names := make([]string, 0)
+		ok := true
+
+		for _, call := range callPattern.FindAllStringSubmatch(chain[1], -1) {
+
+			if _, exists := literals[call[1]]; !exists {
+
+				ok = false
+				break
+
+			}
+
+			names = append(names, call[1])
+
+		}
+
+		if ok && len(names) > len(best) {
+
+			best = names
+
+		}
+
+	}
+
+	if len(best) == 0 {
+
+		return "", ErrNoStream
+
+	}
+
+	var builder strings.Builder
+
+	for _, name := range best {
+
+		decoded, err := decodeURLSafeBase64(literals[name])
+
+		if err != nil {
+
+			return "", fmt.Errorf("ntv: decode fragment: %w", err)
+
+		}
+
+		builder.Write(decoded)
+
+	}
+
+	streamURL := builder.String()
+
+	if !strings.HasPrefix(streamURL, "http://") && !strings.HasPrefix(streamURL, "https://") {
+
+		return "", fmt.Errorf("ntv: decoded stream url invalid")
+
+	}
+
+	return streamURL, nil
+
+}
+
+func decodeURLSafeBase64(value string) ([]byte, error) {
+
+	value = strings.ReplaceAll(value, "-", "+")
+	value = strings.ReplaceAll(value, "_", "/")
+
+	for len(value)%4 != 0 {
+
+		value += "="
+
+	}
+
+	return base64.StdEncoding.DecodeString(value)
+
+}
+
+func (c *Client) playlistPlayable(ctx context.Context, target string, headers map[string]string) bool {
+
+	if target == "" {
+
+		return false
+
+	}
+
+	body, err := c.fetch(ctx, target, headers)
+
+	if err != nil {
+
+		return false
+
+	}
+
+	return strings.Contains(body, "#EXTM3U")
+
+}
+
+func (c *Client) fetch(ctx context.Context, target string, headers map[string]string) (string, error) {
 
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, target, nil)
 
@@ -212,8 +411,17 @@ func (c *Client) fetch(ctx context.Context, target string, referer string) (stri
 	}
 
 	req.Header.Set("User-Agent", browserUA)
-	req.Header.Set("Referer", referer)
-	req.Header.Set("Accept", "text/html,application/json,*/*;q=0.8")
+	req.Header.Set("Accept", "*/*")
+
+	for key, value := range headers {
+
+		if value != "" {
+
+			req.Header.Set(key, value)
+
+		}
+
+	}
 
 	resp, err := c.http.Do(req)
 
@@ -240,19 +448,5 @@ func (c *Client) fetch(ctx context.Context, target string, referer string) (stri
 	}
 
 	return string(body), nil
-
-}
-
-func originOf(raw string) string {
-
-	parsed, err := url.Parse(raw)
-
-	if err != nil || parsed.Scheme == "" || parsed.Host == "" {
-
-		return baseURL
-
-	}
-
-	return parsed.Scheme + "://" + parsed.Host
 
 }

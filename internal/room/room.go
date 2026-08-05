@@ -152,6 +152,14 @@ func (r *Room) control(ctx context.Context, conn *Conn, frame ClientFrame) error
 
 		return r.step(ctx, conn, -1, nil)
 
+	case ActionSetSource:
+
+		return r.setSource(ctx, conn, frame.Index, "select")
+
+	case ActionNextSource:
+
+		return r.setSource(ctx, conn, -1, "stall")
+
 	default:
 
 		r.apply(conn, frame)
@@ -612,52 +620,107 @@ func (r *Room) restoreQueueCursor(cursorKey string) {
 // The proxy's observation is authoritative and room-wide, so the switch happens once, here (§5.2).
 func (r *Room) Failover(ctx context.Context) {
 
+	_ = r.setSource(ctx, nil, -1, "proxy")
+
+}
+
+// setSource moves live TV onto a specific source index, or the next one when index is negative.
+// reason controls rate limiting: proxy (upstream death), stall (client buffer), select (manual).
+func (r *Room) setSource(ctx context.Context, conn *Conn, index int, reason string) error {
+
 	r.mu.Lock()
 
 	if r.state.Item == nil || r.state.Playback == nil || r.state.Item.Kind != resolve.KindChannel {
 
 		r.mu.Unlock()
-		return
+		return nil
 
 	}
 
-	if time.Since(r.lastFailover) < time.Minute {
+	current := r.state.Playback.SourceIndex
+	count := r.state.Playback.SourceCount
+
+	target := index
+
+	if target < 0 {
+
+		target = current + 1
+
+	}
+
+	if target < 0 || target >= count || target == current {
 
 		r.mu.Unlock()
-		return
+		return nil
 
 	}
 
-	next := r.state.Playback.SourceIndex + 1
+	// Proxy and stall failover share a short cooldown so a dying source cannot thrash the room.
+	if reason != "select" {
 
-	if next >= r.state.Playback.SourceCount {
+		cooldown := 12 * time.Second
 
-		r.mu.Unlock()
-		return
+		if reason == "proxy" {
+
+			cooldown = time.Minute
+
+		}
+
+		if time.Since(r.lastFailover) < cooldown {
+
+			r.mu.Unlock()
+			return nil
+
+		}
+
+		r.lastFailover = time.Now()
 
 	}
-
-	r.lastFailover = time.Now()
 
 	item := *r.state.Item
 
 	r.mu.Unlock()
 
-	slog.Warn("switching to backup source", "room", r.id, "channel", item.ID, "source", next)
+	slog.Warn("switching live source", "room", r.id, "channel", item.ID, "from", current, "to", target, "reason", reason)
 
-	playback, err := r.resolver.Play(ctx, item, next, r.id)
+	resolveCtx, cancel := context.WithTimeout(ctx, playbackResolveTimeout)
+	defer cancel()
+
+	playback, err := r.resolver.Play(resolveCtx, item, target, r.id)
 
 	if err != nil {
 
-		r.notice(nil, NoticeError, item.Title+" is unavailable")
-		return
+		r.notice(nil, NoticeError, item.Title+" is unavailable on that source")
+		return err
 
 	}
 
 	r.mu.Lock()
 
+	// Another switch may have landed while we resolved; only apply if still on the same item.
+	if r.state.Item == nil || r.state.Item.Key() != item.Key() {
+
+		r.mu.Unlock()
+		return nil
+
+	}
+
 	r.state.Playback = playback
 	r.state.AnchorAt = nowMs()
+
+	if conn != nil && reason == "select" {
+
+		r.state.LastActor = &Actor{
+
+			UserID: conn.user.UserID,
+			Name: conn.user.Name,
+
+			Action: ActionSetSource,
+			At: nowMs(),
+
+		}
+
+	}
 
 	state := cloneState(r.state)
 
@@ -665,7 +728,16 @@ func (r *Room) Failover(ctx context.Context) {
 
 	r.broadcast(ServerFrame{Type: "room", State: &state})
 
-	r.notice(nil, NoticeFailover, "Switched to backup source")
+	if reason == "select" && conn != nil {
+
+		r.notice(conn, NoticeAction, conn.user.Name+" switched source")
+		return nil
+
+	}
+
+	r.notice(nil, NoticeFailover, "Switched to another source")
+
+	return nil
 
 }
 
@@ -884,6 +956,10 @@ func phrase(action string) string {
 	case ActionSeek:
 
 		return "jumped to a new position"
+
+	case ActionSetSource:
+
+		return "switched source"
 
 	case ActionSetSubtitle:
 

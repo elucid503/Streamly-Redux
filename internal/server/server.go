@@ -36,8 +36,9 @@ func Run(cfg *config.Config) error {
 	bot.Start(rootCtx, cfg.BotToken, cfg.DiscordClientID)
 
 	live := daddylive.New()
+	backup := ntv.New()
 
-	channels := catalog.New(live)
+	channels := catalog.New(live, backup)
 
 	// An unreachable upstream must not stop the binary booting; the catalog simply starts empty and fills on the next pass.
 	if err := channels.Refresh(rootCtx); err != nil {
@@ -53,7 +54,7 @@ func Run(cfg *config.Config) error {
 	box := showbox.New()
 	files := febbox.New(cfg.FebboxUICookie)
 
-	resolver := resolve.New(channels, live, ntv.New(), box, files)
+	resolver := resolve.New(channels, live, backup, box, files)
 
 	var historyStore *history.Store
 

@@ -127,7 +127,7 @@ export interface ClientFrame {
 
   t0?: number;
 
-  action?: "play" | "pause" | "seek" | "next" | "prev" | "setItem" | "setSubtitle";
+  action?: "play" | "pause" | "seek" | "next" | "prev" | "setItem" | "setSubtitle" | "setSource" | "nextSource";
   positionMs?: number;
 
   item?: Item | null;
