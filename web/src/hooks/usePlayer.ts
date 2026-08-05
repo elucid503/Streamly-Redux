@@ -7,18 +7,26 @@ import type { Quality } from "@/lib/types";
 
 const correctionIntervalMs = 2000;
 
-// A live viewer sits at their own buffer depth; only a gap wider than this is worth a jump (see _docs/DESIGN.md §4.4).
+// A live viewer sits at their own buffer depth; only a gap wider than this is worth a jump.
 const liveEdgeToleranceSeconds = 6;
 
-// Deliberate room seeks use the same 2s bar as periodic correction (§4.2). A 400ms bar
-// was firing on play/pause (anchorAt rewrites) and stacking micro-seeks that desynced A/V.
+// Deliberate room seeks use the same 2s bar as periodic correction.
 const deliberateSeekToleranceMs = driftToleranceMs;
 
 // Cap how long we treat a seek as in-flight if "seeked" never arrives.
 const seekLockMs = 1500;
 
-// Most mid-playback rendition failures are transient, so a few quiet retries come before offering alternatives (§5.4).
-const maxRetries = 3;
+// Soft recoveries (startLoad / recoverMediaError) before a full player remount.
+const maxSoftRetries = 3;
+
+// Full HLS remounts after soft recovery is exhausted. Matches what navigating away/back does.
+const maxHardRetries = 2;
+
+// How long currentTime may freeze while the room is playing before we force recovery.
+const stallTimeoutMs = 12_000;
+
+// Ignore tiny currentTime jitter when deciding whether playback made progress.
+const progressEpsilonSeconds = 0.05;
 
 export interface PlayerHandle {
 
@@ -49,13 +57,22 @@ export function usePlayer(video: HTMLVideoElement | null): PlayerHandle {
   const [qualityLabel, setQualityLabel] = useState<string | null>(null);
   const [attempt, setAttempt] = useState(0);
 
-  const retries = useRef(0);
+  const softRetries = useRef(0);
+  const hardRetries = useRef(0);
+  const mediaRecoveries = useRef(0);
   const hlsRef = useRef<Hls | null>(null);
+  const videoRef = useRef<HTMLVideoElement | null>(null);
 
   const seekingRef = useRef(false);
   const pendingSeekRef = useRef<number | null>(null);
   const seekUnlockTimer = useRef<number | null>(null);
   const wasStallingRef = useRef(false);
+  const recoveringRef = useRef(false);
+
+  // Stall detection: only arm after the first frame so initial load is not treated as a hang.
+  const hadFirstFrameRef = useRef(false);
+  const lastMediaTimeRef = useRef(0);
+  const lastProgressAtRef = useRef(0);
 
   // Stable snapshots so the correction timer is not torn down on every room poll.
   const stateRef = useRef(state);
@@ -64,6 +81,7 @@ export function usePlayer(video: HTMLVideoElement | null): PlayerHandle {
 
   stateRef.current = state;
   serverNowRef.current = serverNow;
+  videoRef.current = video;
 
   const playback = state.playback;
   const live = state.item?.kind === "channel";
@@ -86,13 +104,34 @@ export function usePlayer(video: HTMLVideoElement | null): PlayerHandle {
 
   const source = quality?.url ?? playback?.url ?? null;
 
+  const resetSoftRecovery = useCallback(() => {
+
+    softRetries.current = 0;
+    mediaRecoveries.current = 0;
+    recoveringRef.current = false;
+
+  }, []);
+
+  const remountPlayer = useCallback(() => {
+
+    resetSoftRecovery();
+    setError(null);
+    setBuffering(true);
+    setAttempt((current) => current + 1);
+
+  }, [resetSoftRecovery]);
+
   // Quality is personal, so a new item resets the choice rather than carrying one title's rendition into the next (§4.7).
   useEffect(() => {
 
     setQualityLabel(null);
-    retries.current = 0;
+    resetSoftRecovery();
+    hardRetries.current = 0;
     seekingRef.current = false;
     pendingSeekRef.current = null;
+    hadFirstFrameRef.current = false;
+    lastMediaTimeRef.current = 0;
+    lastProgressAtRef.current = Date.now();
 
     if (seekUnlockTimer.current !== null) {
 
@@ -101,7 +140,7 @@ export function usePlayer(video: HTMLVideoElement | null): PlayerHandle {
 
     }
 
-  }, [state.item?.id, state.item?.season, state.item?.episode]);
+  }, [state.item?.id, state.item?.season, state.item?.episode, resetSoftRecovery]);
 
   // Loading reads the room position once; every later change is handled by correction rather than by reloading.
   const positionAtLoad = useRef(0);
@@ -116,8 +155,7 @@ export function usePlayer(video: HTMLVideoElement | null): PlayerHandle {
 
     }
 
-    // Coalesce: keep the latest target while a seek is already in flight.
-    // Stacked currentTime writes are a common progressive-MP4 A/V desync trigger.
+    // Keeps the latest target while a seek is already in flight.
     if (seekingRef.current) {
 
       pendingSeekRef.current = seconds;
@@ -165,6 +203,13 @@ export function usePlayer(video: HTMLVideoElement | null): PlayerHandle {
 
       seekingRef.current = false;
 
+      // Seeks mid-playback (live edge catch-up, post-stall correct) can leave the element paused without re-running the play effect — we should resume if the room wants it.
+      if (stateRef.current.playing && element.paused) {
+
+        void element.play().catch(() => setBuffering(true));
+
+      }
+
       const pending = pendingSeekRef.current;
 
       pendingSeekRef.current = null;
@@ -194,6 +239,132 @@ export function usePlayer(video: HTMLVideoElement | null): PlayerHandle {
 
   }, []);
 
+  const liveEdge = useCallback((element: HTMLVideoElement) => {
+
+    return hlsRef.current?.liveSyncPosition
+      ?? (element.seekable.length > 0 ? element.seekable.end(element.seekable.length - 1) : 0);
+
+  }, []);
+
+  const snapToLiveEdge = useCallback((element: HTMLVideoElement) => {
+
+    const edge = liveEdge(element);
+
+    if (edge > 0 && edge - element.currentTime > 1) {
+
+      hardSeek(element, edge);
+
+    }
+
+  }, [hardSeek, liveEdge]);
+
+  const ensurePlaying = useCallback((element: HTMLVideoElement) => {
+
+    if (stateRef.current.playing && element.paused) {
+
+      void element.play().catch(() => setBuffering(true));
+
+    }
+
+  }, []);
+
+  // Escalating recovery: soft HLS recovery → full remount (what Browse-and-back does) → surface error.
+  const recoverPlayback = useCallback((reason: "network" | "media" | "stall") => {
+
+    const element = videoRef.current;
+
+    if (!element || recoveringRef.current) {
+
+      return;
+
+    }
+
+    recoveringRef.current = true;
+    setBuffering(true);
+    setError(null);
+
+    const hls = hlsRef.current;
+    const finishSoft = () => {
+
+      // Allow another attempt after a beat so a single hung recovery cannot loop instantly.
+      window.setTimeout(() => {
+
+        recoveringRef.current = false;
+
+      }, 1500);
+
+    };
+
+    if (hls && softRetries.current < maxSoftRetries) {
+
+      softRetries.current += 1;
+
+      if (reason === "media") {
+
+        if (mediaRecoveries.current === 0) {
+
+          mediaRecoveries.current = 1;
+          hls.recoverMediaError();
+
+        } else {
+
+          hls.swapAudioCodec();
+          hls.recoverMediaError();
+
+        }
+
+      } else {
+
+        // Network blips and silent stalls: restart fragment loading and rejoin live if needed.
+        hls.startLoad();
+
+        if (liveRef.current) {
+
+          snapToLiveEdge(element);
+
+        }
+
+      }
+
+      ensurePlaying(element);
+      lastProgressAtRef.current = Date.now();
+      finishSoft();
+      return;
+
+    }
+
+    // Native HLS (Safari) has no soft path worth keeping — remount the source.
+    if (!hls && softRetries.current < maxSoftRetries) {
+
+      softRetries.current += 1;
+
+      if (liveRef.current) {
+
+        snapToLiveEdge(element);
+
+      }
+
+      ensurePlaying(element);
+      lastProgressAtRef.current = Date.now();
+      finishSoft();
+      return;
+
+    }
+
+    if (hardRetries.current < maxHardRetries) {
+
+      hardRetries.current += 1;
+      recoveringRef.current = false;
+      remountPlayer();
+      return;
+
+    }
+
+    recoveringRef.current = false;
+    setError("This source stopped responding");
+
+  }, [ensurePlaying, remountPlayer, snapToLiveEdge]);
+
   useEffect(() => {
 
     if (!video || !source) {
@@ -204,8 +375,13 @@ export function usePlayer(video: HTMLVideoElement | null): PlayerHandle {
 
     setError(null);
     setBuffering(true);
+
     seekingRef.current = false;
     pendingSeekRef.current = null;
+    recoveringRef.current = false;
+    hadFirstFrameRef.current = false;
+    lastMediaTimeRef.current = 0;
+    lastProgressAtRef.current = Date.now();
 
     const startAt = live ? 0 : positionAtLoad.current;
 
@@ -224,7 +400,15 @@ export function usePlayer(video: HTMLVideoElement | null): PlayerHandle {
       const hls = new Hls({
         lowLatencyMode: false,
         backBufferLength: 30,
-        maxBufferHole: 0.5,
+        // Live IPTV manifests often have small discontinuities; a tight hole leaves the playhead stuck.
+        maxBufferHole: 1.5,
+        nudgeMaxRetry: 10,
+        highBufferWatchdogPeriod: 1,
+        liveSyncDurationCount: 3,
+        liveMaxLatencyDurationCount: 12,
+        fragLoadingMaxRetry: 6,
+        levelLoadingMaxRetry: 4,
+        manifestLoadingMaxRetry: 4,
       });
 
       hlsRef.current = hls;
@@ -235,33 +419,28 @@ export function usePlayer(video: HTMLVideoElement | null): PlayerHandle {
 
         if (!data.fatal) {
 
+          // bufferStalledError is non-fatal; hls.js nudges, but if the playhead is already frozen
+          // long enough our stall watchdog will escalate. Avoid double-firing soft recovery here.
           return;
 
         }
 
-        if (retries.current < maxRetries) {
+        if (data.type === Hls.ErrorTypes.NETWORK_ERROR) {
 
-          retries.current += 1;
-
-          if (data.type === Hls.ErrorTypes.NETWORK_ERROR) {
-
-            hls.startLoad();
-
-          } else if (data.type === Hls.ErrorTypes.MEDIA_ERROR) {
-
-            hls.recoverMediaError();
-
-          } else {
-
-            hls.startLoad();
-
-          }
-
+          recoverPlayback("network");
           return;
 
         }
 
-        setError("This source stopped responding");
+        if (data.type === Hls.ErrorTypes.MEDIA_ERROR) {
+
+          recoverPlayback("media");
+          return;
+
+        }
+
+        // Mux / other fatal: skip soft path and remount.
+        recoverPlayback("stall");
 
       });
 
@@ -287,7 +466,7 @@ export function usePlayer(video: HTMLVideoElement | null): PlayerHandle {
 
     };
 
-  }, [video, source, playback?.kind, live, attempt, hardSeek]);
+  }, [video, source, playback?.kind, live, attempt, hardSeek, recoverPlayback]);
 
   useEffect(() => {
 
@@ -364,7 +543,7 @@ export function usePlayer(video: HTMLVideoElement | null): PlayerHandle {
 
     const element = video;
 
-    if (!element || element.readyState < 2 || seekingRef.current) {
+    if (!element || element.readyState < 2 || seekingRef.current || recoveringRef.current) {
 
       return;
 
@@ -381,8 +560,7 @@ export function usePlayer(video: HTMLVideoElement | null): PlayerHandle {
 
       }
 
-      const edge = hlsRef.current?.liveSyncPosition
-        ?? (element.seekable.length > 0 ? element.seekable.end(element.seekable.length - 1) : 0);
+      const edge = liveEdge(element);
 
       if (edge > 0 && edge - element.currentTime > liveEdgeToleranceSeconds) {
 
@@ -408,7 +586,7 @@ export function usePlayer(video: HTMLVideoElement | null): PlayerHandle {
 
     }
 
-  }, [video, hardSeek]);
+  }, [video, hardSeek, liveEdge]);
 
   useEffect(() => {
 
@@ -420,11 +598,44 @@ export function usePlayer(video: HTMLVideoElement | null): PlayerHandle {
 
     const timer = window.setInterval(correct, correctionIntervalMs);
 
+    // Stall watchdog: currentTime froze while the room expects playback.
+    const stallTimer = window.setInterval(() => {
+
+      if (!hadFirstFrameRef.current || seekingRef.current || recoveringRef.current) {
+
+        return;
+
+      }
+
+      if (!stateRef.current.playing || error) {
+
+        return;
+
+      }
+
+      if (Date.now() - lastProgressAtRef.current < stallTimeoutMs) {
+
+        return;
+
+      }
+
+      recoverPlayback("stall");
+
+    }, 2000);
+
     const onVisible = () => {
 
       if (document.visibilityState === "visible") {
 
         correct();
+
+        // Background tabs often freeze live buffers; rejoin the edge on return.
+        if (liveRef.current && videoRef.current && stateRef.current.playing) {
+
+          snapToLiveEdge(videoRef.current);
+          ensurePlaying(videoRef.current);
+
+        }
 
       }
 
@@ -440,7 +651,15 @@ export function usePlayer(video: HTMLVideoElement | null): PlayerHandle {
     const onPlaying = () => {
 
       setBuffering(false);
-      retries.current = 0;
+      hadFirstFrameRef.current = true;
+      lastProgressAtRef.current = Date.now();
+      lastMediaTimeRef.current = video.currentTime;
+
+      // A successful frame means the current recovery ladder can start fresh.
+      softRetries.current = 0;
+      mediaRecoveries.current = 0;
+      hardRetries.current = 0;
+      recoveringRef.current = false;
 
       // After a local stall, recompute expected and jump if needed (§4.1).
       if (wasStallingRef.current) {
@@ -460,17 +679,41 @@ export function usePlayer(video: HTMLVideoElement | null): PlayerHandle {
 
       }
 
+      // Only count real forward progress so a stuck playhead with periodic timeupdate still triggers recovery.
+      if (Math.abs(video.currentTime - lastMediaTimeRef.current) >= progressEpsilonSeconds) {
+
+        lastMediaTimeRef.current = video.currentTime;
+        lastProgressAtRef.current = Date.now();
+
+        if (hadFirstFrameRef.current && !video.paused) {
+
+          setBuffering(false);
+
+        }
+
+      }
+
     };
 
     const onDuration = () => setDuration(Number.isFinite(video.duration) ? video.duration : 0);
 
-    // Rolling to the next episode is the queue's whole purpose, including across a season boundary (§4.6).
-    // Pass the finishing item so every client firing "ended" cannot skip queue entries.
+    // Rolling to the next episode is the queue's whole purpose, including across a season boundary.
     const onEnded = () => {
 
       if (!liveRef.current) {
 
         next(stateRef.current.item);
+
+      }
+
+    };
+
+    // Element-level errors (native HLS / progressive) never hit the hls.js handler.
+    const onError = () => {
+
+      if (!hlsRef.current) {
+
+        recoverPlayback("network");
 
       }
 
@@ -483,10 +726,12 @@ export function usePlayer(video: HTMLVideoElement | null): PlayerHandle {
     video.addEventListener("timeupdate", onTime);
     video.addEventListener("durationchange", onDuration);
     video.addEventListener("ended", onEnded);
+    video.addEventListener("error", onError);
 
     return () => {
 
       window.clearInterval(timer);
+      window.clearInterval(stallTimer);
 
       document.removeEventListener("visibilitychange", onVisible);
 
@@ -495,27 +740,31 @@ export function usePlayer(video: HTMLVideoElement | null): PlayerHandle {
       video.removeEventListener("timeupdate", onTime);
       video.removeEventListener("durationchange", onDuration);
       video.removeEventListener("ended", onEnded);
+      video.removeEventListener("error", onError);
 
     };
 
-  }, [video, correct, next]);
+  }, [video, correct, next, recoverPlayback, snapToLiveEdge, ensurePlaying, error]);
 
   const selectQuality = useCallback((label: string) => {
 
-    retries.current = 0;
+    resetSoftRecovery();
+    hardRetries.current = 0;
 
     setQualityLabel(label);
 
-  }, []);
+  }, [resetSoftRecovery]);
 
   const retry = useCallback(() => {
 
-    retries.current = 0;
+    resetSoftRecovery();
+    hardRetries.current = 0;
 
     setError(null);
+    setBuffering(true);
     setAttempt((current) => current + 1);
 
-  }, []);
+  }, [resetSoftRecovery]);
 
   return {
 
