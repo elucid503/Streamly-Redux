@@ -177,6 +177,8 @@ export function TitleDetail({ title, history = [], onBack, onPlay }: TitleDetail
 
     imdbId: detail?.imdbId,
     tmdbId: detail?.tmdbId,
+    // Only when detail failed to resolve and we are still on the catalog id.
+    source: detail ? undefined : title.source,
 
   });
 

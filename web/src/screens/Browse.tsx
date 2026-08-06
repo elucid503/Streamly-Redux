@@ -14,7 +14,7 @@ import { Button } from "@/components/ui/button";
 
 import { useMiniMode } from "@/hooks/useMiniMode";
 import { useRoom } from "@/hooks/useRoom";
-import { getHistory, getTrending, search, type HistoryEntry, type SearchResults, type TopPicks } from "@/lib/api";
+import { getHistory, getTitle, getTrending, search, type HistoryEntry, type SearchResults, type TopPicks } from "@/lib/api";
 import { movieCaption } from "@/lib/titleMeta";
 import type { Title } from "@/lib/types";
 
@@ -166,20 +166,51 @@ export function Browse({ onWatch }: BrowseProps) {
   const openTitle = useCallback((title: Title) => {
 
     // Movies skip the detail page and go straight into the room player.
+    // Still resolve detail first so we get a Showbox id + IMDB/TMDB for streams and subtitles.
     if (title.boxType !== 2) {
 
-      setItem({
-        kind: "vod",
-        id: title.id,
-        title: title.title,
-        poster: title.poster,
-        boxType: 1,
-        caption: movieCaption(title),
-        description: title.description,
-        tmdbId: title.tmdbId,
-      });
+      void getTitle(title.boxType || 1, title.id, title.source)
+        .then((detail) => {
 
-      onWatch();
+          setItem({
+            kind: "vod",
+            // detail.id is the Showbox mid after curated resolve — not a TMDB id.
+            id: detail.id,
+            title: detail.title || title.title,
+            poster: detail.poster || title.poster,
+            boxType: 1,
+            caption: movieCaption({
+              year: detail.year || title.year,
+              rating: detail.rating || title.rating,
+              genres: detail.genres || title.genres,
+            }),
+            description: detail.description || title.description,
+            imdbId: detail.imdbId,
+            tmdbId: detail.tmdbId ?? title.tmdbId,
+          });
+
+          onWatch();
+
+        })
+        .catch(() => {
+
+          setItem({
+            kind: "vod",
+            id: title.id,
+            title: title.title,
+            poster: title.poster,
+            boxType: 1,
+            // Keep source only when id is still the catalog/TMDB identifier.
+            source: title.source,
+            caption: movieCaption(title),
+            description: title.description,
+            tmdbId: title.tmdbId,
+          });
+
+          onWatch();
+
+        });
+
       return;
 
     }
@@ -231,6 +262,8 @@ export function Browse({ onWatch }: BrowseProps) {
       season: entry.season,
       episode: entry.episode,
       episodeTitle: entry.episodeTitle,
+      imdbId: entry.imdbId,
+      tmdbId: entry.tmdbId,
     });
 
     onWatch();

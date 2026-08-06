@@ -59,6 +59,10 @@ export function SubtitleMenu() {
 
       setTracks(await getSubtitles({
 
+        id: item.id,
+        boxType: item.boxType,
+        source: item.source,
+
         imdbId: item.imdbId,
         tmdbId: item.tmdbId,
 

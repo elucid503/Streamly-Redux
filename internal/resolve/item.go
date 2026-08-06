@@ -26,6 +26,9 @@ type Item struct {
 
 	BoxType int `json:"boxType,omitempty"`
 
+	// "tmdb" when the catalog id is a TMDB id rather than a Showbox mid/tid.
+	Source string `json:"source,omitempty"`
+
 	Season int `json:"season,omitempty"`
 	Episode int `json:"episode,omitempty"`
 

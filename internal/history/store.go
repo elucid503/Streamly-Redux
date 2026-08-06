@@ -45,6 +45,9 @@ type Entry struct {
 	Episode int `json:"episode,omitempty" bson:"episode,omitempty"`
 	EpisodeTitle string `json:"episodeTitle,omitempty" bson:"episodeTitle,omitempty"`
 
+	ImdbID string `json:"imdbId,omitempty" bson:"imdbId,omitempty"`
+	TmdbID int `json:"tmdbId,omitempty" bson:"tmdbId,omitempty"`
+
 	// VOD only — last known shared position for this server.
 	PositionMs int64 `json:"positionMs,omitempty" bson:"positionMs,omitempty"`
 	DurationMs int64 `json:"durationMs,omitempty" bson:"durationMs,omitempty"`
@@ -166,6 +169,18 @@ func (s *Store) Record(ctx context.Context, guildID string, item resolve.Item) e
 
 	}
 
+	if item.ImdbID != "" {
+
+		set["imdbId"] = item.ImdbID
+
+	}
+
+	if item.TmdbID > 0 {
+
+		set["tmdbId"] = item.TmdbID
+
+	}
+
 	update := bson.M{
 
 		"$set": set,
@@ -247,6 +262,18 @@ func (s *Store) SaveProgress(ctx context.Context, guildID string, item resolve.I
 	if item.Description != "" {
 
 		set["description"] = item.Description
+
+	}
+
+	if item.ImdbID != "" {
+
+		set["imdbId"] = item.ImdbID
+
+	}
+
+	if item.TmdbID > 0 {
+
+		set["tmdbId"] = item.TmdbID
 
 	}
 

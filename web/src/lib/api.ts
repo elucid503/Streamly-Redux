@@ -28,6 +28,11 @@ export interface TopPicks {
 
 export interface SubtitleQuery {
 
+  // Showbox / catalog id — server looks up IMDB/TMDB when those are missing (Streamly-Web style).
+  id?: string;
+  boxType?: number;
+  source?: Title["source"];
+
   imdbId?: string;
   tmdbId?: number;
 
@@ -112,6 +117,24 @@ export async function getSubtitles(query: SubtitleQuery): Promise<SubtitleTrack[
 
   const params = new URLSearchParams();
 
+  if (query.id) {
+
+    params.set("id", query.id);
+
+  }
+
+  if (query.boxType) {
+
+    params.set("boxType", String(query.boxType));
+
+  }
+
+  if (query.source) {
+
+    params.set("source", query.source);
+
+  }
+
   if (query.imdbId) {
 
     params.set("imdbId", query.imdbId);
@@ -172,6 +195,9 @@ export interface HistoryEntry {
   season?: number;
   episode?: number;
   episodeTitle?: string;
+
+  imdbId?: string;
+  tmdbId?: number;
 
   positionMs?: number;
   durationMs?: number;

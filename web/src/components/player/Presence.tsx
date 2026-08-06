@@ -10,10 +10,11 @@ const actionPhrases: Record<string, string> = {
   seek: "jumped to a new position",
   setItem: "started this",
   setSubtitle: "changed subtitles",
+  setSource: "changed the source",
 
 };
 
-// The one place the chrome departs from a solo player: it makes an unexpected pause legible (see _docs/DESIGN.md §6.2).
+// The one place the chrome departs from a solo player: it makes an unexpected pause legible (see _docs/DESIGN.md).
 export function Presence({ className }: { className?: string }) {
 
   const { participants, lastActor } = useParticipants();

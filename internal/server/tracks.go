@@ -1,6 +1,7 @@
 package server
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"log/slog"
@@ -11,7 +12,9 @@ import (
 
 	"streamly/internal/proxy"
 	"streamly/internal/sources/introdb"
+	"streamly/internal/sources/showbox"
 	"streamly/internal/sources/subdl"
+	"streamly/internal/sources/tmdb"
 
 	"github.com/gin-gonic/gin"
 )
@@ -52,11 +55,29 @@ func (a *api) subtitles(c *gin.Context) {
 
 	}
 
+	// Streamly-Web resolves IMDB/TMDB from the media catalog; clients often omit them
+	// (movies skip the detail page, history used to drop them). Fill from Showbox when needed.
+	if strings.TrimSpace(query.ImdbID) == "" && query.TmdbID <= 0 {
+
+		imdbID, tmdbID := a.captionIDs(c.Request.Context(), c.Query("id"), intQuery(c, "boxType"), c.Query("source"))
+
+		query.ImdbID = imdbID
+		query.TmdbID = tmdbID
+
+	}
+
+	if strings.TrimSpace(query.ImdbID) == "" && query.TmdbID <= 0 {
+
+		c.JSON(http.StatusOK, gin.H{"tracks": []trackView{}})
+		return
+
+	}
+
 	releases, err := a.subdl.Search(c.Request.Context(), query)
 
 	if err != nil {
 
-		slog.Error("subtitle search failed", "imdb", query.ImdbID, "err", err)
+		slog.Error("subtitle search failed", "imdb", query.ImdbID, "tmdb", query.TmdbID, "err", err)
 
 		c.JSON(http.StatusBadGateway, gin.H{"error": "subtitle search failed"})
 		return
@@ -203,6 +224,114 @@ func intQuery(c *gin.Context, name string) int {
 	}
 
 	return value
+
+}
+
+// captionIDs looks up external IDs the way Streamly-Web's MovieCaptionQuery / EpisodeCaptionQuery do.
+func (a *api) captionIDs(ctx context.Context, id string, boxType int, source string) (imdbID string, tmdbID int) {
+
+	id = strings.TrimSpace(id)
+
+	if id == "" {
+
+		return "", 0
+
+	}
+
+	if boxType == 0 {
+
+		boxType = showbox.BoxTypeMovie
+
+	}
+
+	if source == "tmdb" {
+
+		if parsed, err := strconv.Atoi(id); err == nil && parsed > 0 {
+
+			tmdbID = parsed
+
+		}
+
+	}
+
+	if a.showbox == nil {
+
+		return "", tmdbID
+
+	}
+
+	var detail *showbox.Detail
+	var err error
+
+	if source == "tmdb" && a.tmdb != nil {
+
+		tmdbNum, parseErr := strconv.Atoi(id)
+
+		if parseErr != nil {
+
+			return "", tmdbID
+
+		}
+
+		kind := tmdb.KindMovie
+
+		if boxType == showbox.BoxTypeSeries {
+
+			kind = tmdb.KindTV
+
+		}
+
+		curated, curatedErr := a.tmdb.Details(ctx, kind, tmdbNum)
+
+		if curatedErr != nil {
+
+			return "", tmdbNum
+
+		}
+
+		detail, err = a.resolveCurated(ctx, curated, boxType)
+
+		if err != nil {
+
+			return "", tmdbNum
+
+		}
+
+		return detail.ImdbID, curated.ID
+
+	}
+
+	if boxType == showbox.BoxTypeSeries {
+
+		detail, err = a.showbox.SeriesDetail(ctx, id)
+
+	} else {
+
+		detail, err = a.showbox.MovieDetail(ctx, id)
+
+	}
+
+	if err != nil || detail == nil {
+
+		slog.Debug("caption id lookup failed", "id", id, "boxType", boxType, "source", source, "err", err)
+
+		return "", tmdbID
+
+	}
+
+	if detail.ImdbID != "" {
+
+		imdbID = detail.ImdbID
+
+	}
+
+	if detail.TmdbID > 0 {
+
+		tmdbID = detail.TmdbID
+
+	}
+
+	return imdbID, tmdbID
 
 }
 

@@ -10,6 +10,7 @@ export interface Item {
   caption?: string;
 
   boxType?: number;
+  source?: "showbox" | "tmdb";
 
   season?: number;
   episode?: number;

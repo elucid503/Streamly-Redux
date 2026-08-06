@@ -3,6 +3,7 @@ package room
 import (
 	"context"
 	"testing"
+	"time"
 
 	"streamly/internal/resolve"
 )
@@ -386,7 +387,7 @@ func TestFailoverAdvancesToTheNextSource(t *testing.T) {
 
 }
 
-func TestFailoverStopsAtTheLastSource(t *testing.T) {
+func TestFailoverWrapsFromLastSourceToFirst(t *testing.T) {
 
 	room, _, resolver := testRoom()
 
@@ -395,13 +396,43 @@ func TestFailoverStopsAtTheLastSource(t *testing.T) {
 	room.state.Item = &channel
 	room.state.Playback = &resolve.Playback{SourceIndex: 1, SourceCount: 2}
 
+	// Pretend the first switch already opened the cycle window so cooldown is the only gate.
+	room.lastFailover = time.Time{}
+	room.failoverCycleStart = time.Now()
+
+	room.Failover(context.Background())
+
+	if resolver.sourceIndex != 0 {
+
+		t.Fatalf("failover resolved source %d, want 0 (wrap)", resolver.sourceIndex)
+
+	}
+
+	if room.state.Playback.SourceIndex != 0 {
+
+		t.Fatalf("playback stayed on source %d, want 0", room.state.Playback.SourceIndex)
+
+	}
+
+}
+
+func TestFailoverStopsWrappingAfterCycleTimeout(t *testing.T) {
+
+	room, _, resolver := testRoom()
+
+	channel := resolve.Item{Kind: resolve.KindChannel, ID: "espn-us", Title: "ESPN"}
+
+	room.state.Item = &channel
+	room.state.Playback = &resolve.Playback{SourceIndex: 1, SourceCount: 2}
+
+	room.failoverCycleStart = time.Now().Add(-maxFailoverCycle - time.Second)
 	resolver.sourceIndex = -1
 
 	room.Failover(context.Background())
 
 	if resolver.sourceIndex != -1 {
 
-		t.Fatal("failover tried to resolve past the last source")
+		t.Fatal("failover wrapped after the cycle timeout")
 
 	}
 

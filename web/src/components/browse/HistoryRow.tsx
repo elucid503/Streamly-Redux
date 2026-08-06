@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from "react";
-import { ChevronLeft, ChevronRight, Clapperboard, Radio } from "lucide-react";
+import { ChevronLeft, ChevronRight, Clapperboard } from "lucide-react";
 
+import { ChannelLogo } from "@/components/browse/ChannelLogo";
 import { PlayOverlay } from "@/components/browse/PlayOverlay";
 import { Button } from "@/components/ui/button";
 import type { HistoryEntry } from "@/lib/api";
@@ -194,35 +195,35 @@ function HistoryCard({ entry, onSelect }: { entry: HistoryEntry; onSelect: (entr
 
       <div
         className={cn(
-          "bg-card relative overflow-hidden rounded-lg border",
-          isChannel ? "aspect-video" : "aspect-[2/3]",
+          "relative overflow-hidden rounded-lg border",
+          isChannel ? "" : "bg-card aspect-[2/3]",
         )}
       >
 
-        {entry.poster ? (
+        {isChannel ? (
+
+          <ChannelLogo logo={entry.poster} name={entry.title} />
+
+        ) : entry.poster ? (
 
           <img
             src={entry.poster}
             alt=""
             loading="lazy"
-            className={cn("size-full", isChannel ? "object-contain p-3" : "object-cover")}
+            className="size-full object-cover"
           />
 
         ) : (
 
           <div className="flex size-full items-center justify-center">
 
-            {isChannel ? (
-              <Radio className="text-muted-foreground size-6" />
-            ) : (
-              <Clapperboard className="text-muted-foreground size-6" />
-            )}
+            <Clapperboard className="text-muted-foreground size-6" />
 
           </div>
 
         )}
 
-        <PlayOverlay size={isChannel ? "sm" : "md"} />
+        <PlayOverlay size={isChannel ? "sm" : "md"} className={isChannel ? "rounded-md" : undefined} />
 
         {progress > 0 && (
 

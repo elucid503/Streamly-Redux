@@ -417,11 +417,13 @@ export function usePlayer(video: HTMLVideoElement | null): PlayerHandle {
     }
 
     // Exhausted local recovery on live TV: advance room source before showing a hard error.
+    // Source switching is circular on the server (with a cycle timeout), so any multi-source
+    // channel can still request next even when already on the last catalog entry.
     const room = stateRef.current;
     const current = room.playback?.sourceIndex ?? 0;
     const total = room.playback?.sourceCount ?? 0;
 
-    if (liveRef.current && total > current + 1 && failoverForSourceRef.current !== current) {
+    if (liveRef.current && total > 1 && failoverForSourceRef.current !== current) {
 
       failoverForSourceRef.current = current;
       recoveringRef.current = false;
@@ -769,7 +771,8 @@ export function usePlayer(video: HTMLVideoElement | null): PlayerHandle {
       const current = room.playback?.sourceIndex ?? 0;
       const total = room.playback?.sourceCount ?? 0;
 
-      if (total <= current + 1 || failoverForSourceRef.current === current) {
+      // Circular failover (server-side wrap + cycle timeout) — allow next from any source.
+      if (total <= 1 || failoverForSourceRef.current === current) {
 
         return;
 

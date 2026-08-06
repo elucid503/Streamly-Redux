@@ -13,6 +13,9 @@ import (
 
 const playbackResolveTimeout = 40 * time.Second
 
+// Stop wrapping live sources after this window so a dead channel cannot thrash forever.
+const maxFailoverCycle = 2 * time.Minute
+
 type Resolver interface {
 	Play(ctx context.Context, item resolve.Item, sourceIndex int, room string) (*resolve.Playback, error)
 }
@@ -36,6 +39,9 @@ type Room struct {
 	conns map[*Conn]bool
 
 	lastFailover time.Time
+
+	// Marks the first automatic source switch for the current item; used to cap circular failover.
+	failoverCycleStart time.Time
 
 	// Item key whose autoplay-next was already accepted; blocks multi-client "ended" races
 	// until setItem lands a different title.
@@ -297,6 +303,8 @@ func (r *Room) setItem(ctx context.Context, conn *Conn, item *resolve.Item, sour
 
 	// New title is live — allow a future autoplay-next for this key when it eventually ends.
 	r.consumedAutoplay = ""
+	r.lastFailover = time.Time{}
+	r.failoverCycleStart = time.Time{}
 
 	// Queue is "up next" only: once something starts, drop it from the list.
 	r.consumeFromQueue(*item)
@@ -625,7 +633,6 @@ func (r *Room) Failover(ctx context.Context) {
 }
 
 // setSource moves live TV onto a specific source index, or the next one when index is negative.
-// reason controls rate limiting: proxy (upstream death), stall (client buffer), select (manual).
 func (r *Room) setSource(ctx context.Context, conn *Conn, index int, reason string) error {
 
 	r.mu.Lock()
@@ -645,6 +652,26 @@ func (r *Room) setSource(ctx context.Context, conn *Conn, index int, reason stri
 	if target < 0 {
 
 		target = current + 1
+
+		// Walk sources circularly so a dead primary can be retried after backups fail.
+		if target >= count {
+
+			if count <= 1 || (!r.failoverCycleStart.IsZero() && time.Since(r.failoverCycleStart) >= maxFailoverCycle) {
+
+				r.mu.Unlock()
+				return nil
+
+			}
+
+			target = 0
+
+		}
+
+		if r.failoverCycleStart.IsZero() {
+
+			r.failoverCycleStart = time.Now()
+
+		}
 
 	}
 
@@ -674,6 +701,11 @@ func (r *Room) setSource(ctx context.Context, conn *Conn, index int, reason stri
 		}
 
 		r.lastFailover = time.Now()
+
+	} else {
+
+		// Manual pick starts a fresh cycle window.
+		r.failoverCycleStart = time.Time{}
 
 	}
 
