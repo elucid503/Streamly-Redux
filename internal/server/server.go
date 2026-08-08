@@ -112,7 +112,7 @@ func Run(cfg *config.Config) error {
 		showbox: box,
 		tmdb:    tmdb.New(cfg.TMDBAPIKey),
 		tvmaze:  tvmaze.New(),
-		sports:  sports.New(channels),
+		sports:  sports.New(channels, backup),
 
 		subdl:   subdl.New(cfg.SubdlAPIKey),
 		introdb: introdb.New(cfg.IntroDBToken),

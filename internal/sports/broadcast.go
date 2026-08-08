@@ -4,6 +4,7 @@ import (
 	"strings"
 
 	"streamly/internal/catalog"
+	"streamly/internal/sources/ntv"
 )
 
 // broadcastCandidate is a live TV/stream outlet from ESPN for one event.
@@ -20,6 +21,7 @@ type broadcastCandidate struct {
 }
 
 // skipBroadcasts are OTT-only outlets we do not map to linear catalog channels.
+// Keys must match normalizeKey (lowercase, no dots/apostrophes).
 var skipBroadcasts = map[string]bool{
 
 	"peacock": true,
@@ -37,9 +39,9 @@ var skipBroadcasts = map[string]bool{
 	"paramount plus": true,
 	"disney+": true,
 	"fubo": true,
-	"mlb.tv": true,
+	"mlbtv": true,
 	"nba league pass": true,
-	"nhl.tv": true,
+	"nhltv": true,
 	"espn+": true,
 	"espn unlmtd": true,
 	"espn unlimited": true,
@@ -252,18 +254,27 @@ var categoryDefaultNetworks = map[string][]string{
 }
 
 // matchChannel picks the best catalog channel for a fixture using live ESPN
-// broadcast data first, then team RSN maps, then national defaults.
-func matchChannel(m Match, channels []catalog.Channel) *MatchedChannel {
+// broadcast data first, then NTV team/OTT feeds for OTT exclusives, then team
+// RSN maps, then a final NTV pass, then national defaults.
+func matchChannel(m Match, channels []catalog.Channel, ntvListing []ntv.Channel) *MatchedChannel {
 
-	if len(channels) == 0 {
+	linearTerms := expandBroadcastLabels(m.Broadcasts)
 
-		return nil
+	for _, term := range linearTerms {
+
+		if ch := findCatalogChannel(channels, term); ch != nil {
+
+			return ch
+
+		}
 
 	}
 
-	for _, term := range expandBroadcastLabels(m.Broadcasts) {
+	// Apple TV / Peacock / etc. are skipped for linear matching; try NTV before
+	// team RSN maps so exclusives do not wrongly open YES/SNY style networks.
+	if broadcastsAreOTTOnly(m.Broadcasts) || hasOTTBroadcast(m.Broadcasts) {
 
-		if ch := findCatalogChannel(channels, term); ch != nil {
+		if ch := matchNTVChannel(m, ntvListing); ch != nil {
 
 			return ch
 
@@ -281,6 +292,13 @@ func matchChannel(m Match, channels []catalog.Channel) *MatchedChannel {
 
 	}
 
+	// Linear label missed the catalog and no RSN hit — NTV team feeds still help.
+	if ch := matchNTVChannel(m, ntvListing); ch != nil {
+
+		return ch
+
+	}
+
 	for _, name := range categoryDefaultNetworks[m.Category] {
 
 		if ch := findCatalogChannel(channels, name); ch != nil {
@@ -292,6 +310,65 @@ func matchChannel(m Match, channels []catalog.Channel) *MatchedChannel {
 	}
 
 	return nil
+
+}
+
+func hasOTTBroadcast(names []string) bool {
+
+	for _, name := range names {
+
+		for _, part := range splitBroadcastName(name) {
+
+			if skipBroadcasts[normalizeKey(part)] {
+
+				return true
+
+			}
+
+		}
+
+	}
+
+	return false
+
+}
+
+// True when every named outlet is OTT/radio (or there are no names at all).
+func broadcastsAreOTTOnly(names []string) bool {
+
+	if len(names) == 0 {
+
+		return true
+
+	}
+
+	sawOutlet := false
+
+	for _, name := range names {
+
+		for _, part := range splitBroadcastName(name) {
+
+			key := normalizeKey(part)
+
+			if key == "" {
+
+				continue
+
+			}
+
+			sawOutlet = true
+
+			if !skipBroadcasts[key] {
+
+				return false
+
+			}
+
+		}
+
+	}
+
+	return sawOutlet || len(names) == 0
 
 }
 

@@ -24,6 +24,8 @@ type Catalog struct {
 
 	mu sync.RWMutex
 	channels []Channel
+	// Playable outside the Live TV grid (NTV team/OTT feeds sports injects).
+	aux map[string]Channel
 
 }
 
@@ -35,6 +37,7 @@ func New(live *daddylive.Client, backup *ntv.Client) *Catalog {
 		ntv: backup,
 
 		http: referenceClient(),
+		aux: map[string]Channel{},
 
 	}
 
@@ -70,7 +73,37 @@ func (c *Catalog) Channel(id string) (Channel, bool) {
 
 	}
 
+	if channel, ok := c.aux[id]; ok {
+
+		return channel, true
+
+	}
+
 	return Channel{}, false
+
+}
+
+// EnsureAux registers a channel for resolve without listing it in Live TV.
+// Sports uses this for NTV-only team/OTT feeds that have no iptv-org identity.
+func (c *Catalog) EnsureAux(channel Channel) {
+
+	if channel.ID == "" || len(channel.Sources) == 0 {
+
+		return
+
+	}
+
+	c.mu.Lock()
+
+	if c.aux == nil {
+
+		c.aux = map[string]Channel{}
+
+	}
+
+	c.aux[channel.ID] = channel
+
+	c.mu.Unlock()
 
 }
 

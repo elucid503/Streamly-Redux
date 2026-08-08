@@ -1,6 +1,7 @@
 package sports
 
 import (
+	"context"
 	"log/slog"
 	"net/http"
 	"sort"
@@ -8,6 +9,7 @@ import (
 	"time"
 
 	"streamly/internal/catalog"
+	"streamly/internal/sources/ntv"
 )
 
 const matchesTTL = 2 * time.Minute
@@ -17,6 +19,7 @@ type Client struct {
 
 	http *http.Client
 	catalog *catalog.Catalog
+	ntv *ntv.Client
 
 	mu sync.RWMutex
 	matches []Match
@@ -25,12 +28,14 @@ type Client struct {
 }
 
 // New builds a sports Client. catalog may be nil (channel links omitted).
-func New(cat *catalog.Catalog) *Client {
+// ntv is optional; when set, team/OTT feeds from NTV fill gaps left by linear-only matching.
+func New(cat *catalog.Catalog, backup *ntv.Client) *Client {
 
 	return &Client{
 
 		http: &http.Client{Timeout: espnFetchTimeout},
 		catalog: cat,
+		ntv: backup,
 
 	}
 
@@ -95,8 +100,9 @@ func (c *Client) attachChannels(matches []Match) {
 	}
 
 	channels := c.catalog.Channels()
+	ntvListing := c.ntvListing()
 
-	if len(channels) == 0 {
+	if len(channels) == 0 && len(ntvListing) == 0 {
 
 		return
 
@@ -104,9 +110,32 @@ func (c *Client) attachChannels(matches []Match) {
 
 	for i := range matches {
 
-		matches[i].Channel = matchChannel(matches[i], channels)
+		matched := matchChannel(matches[i], channels, ntvListing)
+		ensureNTVAux(c.catalog, ntvListing, matched)
+		matches[i].Channel = matched
 
 	}
+
+}
+
+func (c *Client) ntvListing() []ntv.Channel {
+
+	if c.ntv == nil {
+
+		return nil
+
+	}
+
+	listing, err := c.ntv.Channels(context.Background())
+
+	if err != nil {
+
+		slog.Warn("sports ntv listing unavailable", "err", err)
+		return nil
+
+	}
+
+	return listing
 
 }
 

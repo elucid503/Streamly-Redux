@@ -153,3 +153,34 @@ func TestUnknownTitleIsDropped(t *testing.T) {
 	}
 
 }
+
+// DaddyLive lists WPIX as "CW PIX 11 USA"; iptv-org only has WPIX-HD without PIX branding.
+func TestPIX11MatchesWPIXHD(t *testing.T) {
+
+	ref := reference{
+
+		ID: "WPIXHD.us",
+		Name: "WPIX-HD",
+		Country: "US",
+
+	}
+
+	applyExtras(&ref)
+
+	index := newIndex([]reference{ref})
+
+	found, ok := index.match("cw pix 11 usa")
+
+	if !ok || found.reference.ID != "WPIXHD.us" {
+
+		t.Fatalf("matched %q (ok=%v), want WPIXHD.us", found.reference.ID, ok)
+
+	}
+
+	if found.reference.Name != "PIX 11" {
+
+		t.Fatalf("display name %q, want PIX 11", found.reference.Name)
+
+	}
+
+}

@@ -18,6 +18,24 @@ const (
 
 const maxBodyBytes = 64 << 20
 
+// Branding providers use that iptv-org omits from alt_names (e.g. "CW PIX 11 USA" → WPIXHD.us).
+var referenceExtras = map[string]struct {
+
+	// Prefer when set; the previous iptv-org name is retained as an alt.
+	Name string
+	AltNames []string
+
+}{
+
+	"WPIXHD.us": {
+
+		Name: "PIX 11",
+		AltNames: []string{"PIX11", "CW PIX 11", "WPIX"},
+
+	},
+
+}
+
 // One canonical channel as iptv-org describes it. Providers are matched onto these, never to each other.
 type reference struct {
 
@@ -106,7 +124,7 @@ func fetchReference(ctx context.Context, client *http.Client) ([]reference, erro
 
 		}
 
-		references = append(references, reference{
+		ref := reference{
 
 			ID: entry.ID,
 			Name: entry.Name,
@@ -120,11 +138,36 @@ func fetchReference(ctx context.Context, client *http.Client) ([]reference, erro
 
 			Logo: byChannel[entry.ID],
 
-		})
+		}
+
+		applyExtras(&ref)
+
+		references = append(references, ref)
 
 	}
 
 	return references, nil
+
+}
+
+func applyExtras(ref *reference) {
+
+	extra, ok := referenceExtras[ref.ID]
+
+	if !ok {
+
+		return
+
+	}
+
+	if extra.Name != "" && extra.Name != ref.Name {
+
+		ref.AltNames = append(ref.AltNames, ref.Name)
+		ref.Name = extra.Name
+
+	}
+
+	ref.AltNames = append(ref.AltNames, extra.AltNames...)
 
 }
 
